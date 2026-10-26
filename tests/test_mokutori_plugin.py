@@ -180,6 +180,29 @@ class PluginFlow(unittest.TestCase):
         status, _ = ipad.message("after unpair", [])
         self.assertGreaterEqual(status, 400)
 
+    def test_https_link_pairs_same_code_and_replay_via_qr_is_rejected(self):
+        self.setup_agent()
+        pairing = self.mokutori("pair")
+        self.assertTrue(pairing["pair_link"].startswith("https://mokutori.com/pair#"))
+        self.assertEqual(app.parse_pairing(pairing["pair_link"]), app.parse_pairing(pairing["pair_url"]))
+        # A generated link alone has not established a connection.
+        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+
+        phone = app.App()
+        status, receipt = phone.pair(pairing["pair_link"], "Synthetic iPhone")
+        self.assertEqual(status, 202, receipt)
+        paired = self.mokutori("pair-check")
+        self.assertEqual(paired["paired"][0]["actor_id"], phone.state["actor_id"])
+        self.assertEqual(self.status_of(phone, receipt["message_id"])["code"], "read")
+
+        other_device = app.App()
+        status, _ = other_device.pair(pairing["pair_url"])
+        self.assertEqual(status, 202)
+        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+        self.assertEqual(len(self.mokutori("devices")["devices"]), 1)
+        self.send_page(phone)
+        self.assertEqual(len(self.mokutori("inbox")["batches"]), 1)
+
     def test_upgrade_reuses_external_owner_for_pair_receive_recovery_and_unpair(self):
         setup = self.setup_agent()
         home = plugin.Home(self.home)

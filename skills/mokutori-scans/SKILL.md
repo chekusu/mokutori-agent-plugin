@@ -1,6 +1,6 @@
 ---
 name: mokutori-scans
-description: Pair the owner's Mokutori iPad scanner with this agent by QR code and read the pages it sends (corrected page images and OCR text). Use when the owner wants to connect Mokutori, scan paper or books into this conversation, or asks what was scanned.
+description: Pair the owner's Mokutori scanner with this agent using a QR image or clickable phone link and read the pages it sends (corrected page images and OCR text). Use when the owner wants to connect Mokutori, scan paper or books into this conversation, or asks what was scanned.
 ---
 
 # Mokutori scans
@@ -37,16 +37,28 @@ If the owner already has a Yobiru owner credential, an authorized **new** setup 
 `sh M setup --owner-home /absolute/YOBIRU_HOME --agent ...`. This keeps the owner credential in its
 original directory. Existing setups automatically use their saved location and do not need this command.
 
-## Pair an iPad
+## Pair an iPad or iPhone
 
-1. `sh M pair` makes a one-time QR code (`qr_png`), valid for 15 minutes. Show the owner that image
-   (send it in this chat as a picture; with `--terminal` you also get `qr_text` for a monospace view).
-   Never post it anywhere else: whoever scans it first can send pages to this agent.
-2. The owner points the iPad at it: hold the phone or screen under the scanning stand and open the
-   iPad's Camera app, then tap the Mokutori banner. Mokutori opens a confirmation sheet. The owner checks the gateway and key fingerprint, then confirms to connect.
-3. `sh M pair-check --wait 120` accepts the iPad. Tell the owner it is paired.
+1. `sh M pair` makes a one-time pairing, valid for 15 minutes. Always send **both** the `qr_png` image
+   and the exact `pair_link` as a clickable Markdown link: `[Open Mokutori to pair](PAIR_LINK)`.
+   This lets an owner chatting on their phone tap the link instead of trying to scan the same screen.
+   With `--terminal` you also get `qr_text`. Never post the image or full link anywhere else.
+2. The owner can scan the QR in Mokutori, import its saved image on a supporting phone app, or tap
+   the HTTPS link. A supporting installed app opens receiver confirmation; otherwise the official
+   `/pair` page provides installation and app-opening guidance. The owner checks the receiver, gateway
+   and key fingerprint once; the app then performs the handshake automatically.
+3. Run `sh M pair-check --wait 120`. Report pairing success **only if its `paired` array is nonempty**.
+   `ok: true`, a generated code, a link opening the app, or a queued proof does not establish success.
+   An empty result means still waiting; if the code expired, generate and show a fresh image and link.
+
+`pair_link` uses `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...`. Keep the parameters
+in the fragment exactly as returned; never put them in an HTTP query/path or a URL shortener. Do not
+replace the actual `&` separators with literal `&amp;` in a chat link. The existing `pair_url` and QR payload
+remain `mokutori://pair?...` for compatibility. Both entries share one secret, expiry and single-use pairing.
 
 `sh M devices` lists paired iPads; `sh M unpair ACTOR_ID` disconnects one (it is blocked at the gateway).
+Paired/configured does not mean the personal agent is currently online. The plugin provides no trusted
+real-time presence signal; do not report online from pairing, HTTP reachability or a binding flag.
 
 ## Receive pages
 

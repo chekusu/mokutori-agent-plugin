@@ -23,7 +23,11 @@ sh scripts/mokutori pair-check --wait 600
 
 Replace the example email with the owner's address and `CODE` with the code they receive. Only the owner
 should see the one-time QR image. Scan it with the compatible Mokutori app, confirm the gateway and
-fingerprint, and remove the temporary QR image when finished. The pairing scheme is `mokutori://pair`.
+fingerprint, and remove the temporary QR image when finished. The host CLI now returns both `qr_png`
+and `pair_link`: show both the image and the clickable HTTPS fragment link to the owner, especially when
+they are using Muse on the same phone. The existing QR and `pair_url` keep `mokutori://pair` compatibility.
+Only a nonempty `pair-check.paired` result confirms pairing. The MCP bridge's read/acknowledge tools do
+not generate pairing links or provide trusted real-time agent presence.
 
 ## Run the bridge
 

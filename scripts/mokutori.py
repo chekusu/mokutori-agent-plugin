@@ -32,7 +32,7 @@ import bot_client as B  # noqa: E402
 import bot_common as C  # noqa: E402
 import bot_e2e as E  # noqa: E402
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 DEFAULT_GATEWAY = "https://bots.yobiru.com"
 PAIR_PREFIX = "mokutori-pair/1"
 PAIR_SCHEME = "mokutori"
@@ -220,7 +220,7 @@ def finish_setup(home, state, a, gateway, owner, bot_id):
         state["setup"]["owner_home"] = str(owner)
     home.save(state)
     out({"ok": True, **status_view(home, state),
-         "next": "Run `mokutori pair` and scan the QR code with the iPad."})
+         "next": "Run `mokutori pair`, then give the owner both its QR image and clickable pair_link."})
 
 
 def pairing_state(pairing):
@@ -296,10 +296,19 @@ def cmd_status(home, a):
 
 
 # ---------------------------------------------------------------- pairing
+def pairing_parameters(setup, pairing_id, secret):
+    return urllib.parse.urlencode([("v", "1"), ("g", setup["gateway"]), ("b", setup["bot_id"]),
+                                   ("k", setup["bot_key"]), ("i", pairing_id), ("s", secret)])
+
+
 def pairing_url(setup, pairing_id, secret):
-    query = urllib.parse.urlencode([("v", "1"), ("g", setup["gateway"]), ("b", setup["bot_id"]),
-                                    ("k", setup["bot_key"]), ("i", pairing_id), ("s", secret)])
-    return PAIR_SCHEME + "://pair?" + query
+    """Keep the existing scheme URL and QR compatible with already installed scanners."""
+    return PAIR_SCHEME + "://pair?" + pairing_parameters(setup, pairing_id, secret)
+
+
+def pairing_link(setup, pairing_id, secret):
+    """Clickable Universal Link. The pairing parameters stay out of the HTTP request target."""
+    return "https://mokutori.com/pair#" + pairing_parameters(setup, pairing_id, secret)
 
 
 def pairing_proof(secret, pairing_id, bot_id, actor_id):
@@ -366,11 +375,14 @@ def cmd_pair(home, a):
     png = Path(a.png).expanduser() if a.png else home.path / ("pair-%s.png" % pairing_id)
     write_png(png, matrix)
     result = {"ok": True, "pairing_id": pairing_id, "expires_at": iso(expires), "qr_png": str(png),
-              "pair_url": url,
-              "show_owner": "Show the QR image to the owner. They hold it under the iPad on the scanning stand "
-                            "(or scan it with the iPad's Camera app). It works once and expires in %d minutes; "
-                            "never post it anywhere else." % a.minutes,
-              "next": "Run `mokutori pair-check --wait 120` to finish pairing.",
+              "pair_url": url, "pair_link": pairing_link(setup, pairing_id, secret),
+              "show_owner": "Send the owner both the QR PNG and pair_link as a clickable HTTPS link. "
+                            "On the same phone they tap the link; on another device they scan the QR. "
+                            "They confirm the recipient once in Mokutori, then the app handshakes automatically. "
+                            "Both carry the same one-time code, expiring in %d minutes; "
+                            "never post either anywhere else." % a.minutes,
+              "next": "Run `mokutori pair-check --wait 120` to finish pairing. Report success only when its "
+                      "paired list is nonempty; generating a link or receiving ok does not confirm pairing.",
               "pairing_warnings": pairing_warnings(state)}
     if a.terminal:
         result["qr_text"] = terminal_qr(matrix)
@@ -447,8 +459,9 @@ def check_pairings(home, wait=0):
 def cmd_pair_check(home, a):
     paired = check_pairings(home, wait=a.wait)
     out({"ok": True, "paired": paired, "pairing_warnings": pairing_warnings(home.state()),
-         "note": "Paired: pages scanned on this iPad now arrive in `mokutori inbox`." if paired
-         else "No iPad has paired yet. The QR code must be scanned within its expiry time."})
+         "note": "Paired: pages scanned on this device now arrive in `mokutori inbox`." if paired
+         else "No device has paired yet. Open the link or scan the QR and confirm the recipient in Mokutori "
+              "before the code expires; ok alone does not confirm pairing."})
 
 
 def cmd_devices(home, a):
@@ -739,13 +752,13 @@ def main(argv=None):
                                         "existing setups automatically retain setup.owner_home")
     p.add_argument("--force", action="store_true")
     sub.add_parser("status", help="setup, paired iPads and open pairings")
-    p = sub.add_parser("pair", help="make a one-time QR code for the iPad")
+    p = sub.add_parser("pair", help="make a one-time pairing QR code and clickable HTTPS link")
     p.add_argument("--png", help="where to write the QR image")
     p.add_argument("--minutes", type=int, default=PAIR_MINUTES, choices=range(1, 61), metavar="1-60")
     p.add_argument("--label", help="a note for this pairing, e.g. which iPad")
     p.add_argument("--terminal", action="store_true", help="also print the QR code as text")
     p.add_argument("--wait", type=int, default=0, help="seconds to wait for the iPad to pair")
-    p = sub.add_parser("pair-check", help="finish pairings whose QR code an iPad has scanned")
+    p = sub.add_parser("pair-check", help="finish pairings confirmed in the app from a link or QR code")
     p.add_argument("--wait", type=int, default=0)
     sub.add_parser("devices", help="paired iPads")
     p = sub.add_parser("unpair", help="block a paired iPad")

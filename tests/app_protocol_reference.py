@@ -56,10 +56,18 @@ def call(base, method, path, body=None, token=None):
 
 def parse_pairing(url):
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "mokutori" or parsed.netloc != "pair":
+    if parsed.scheme == "mokutori" and parsed.netloc == "pair" and not parsed.path and not parsed.fragment:
+        parameters = parsed.query
+    elif (parsed.scheme == "https" and parsed.netloc == "mokutori.com"
+          and parsed.path == "/pair" and not parsed.query):
+        parameters = parsed.fragment
+    else:
         raise ValueError("not a Mokutori pairing code")
-    query = dict(urllib.parse.parse_qsl(parsed.query, strict_parsing=True))
-    if query.get("v") != "1" or not all(query.get(k) for k in "gbkis"):
+    pairs = urllib.parse.parse_qsl(parameters, strict_parsing=True)
+    query = dict(pairs)
+    if len(query) != len(pairs):
+        raise ValueError("duplicate pairing parameter")
+    if set(query) != set("vgbkis") or query.get("v") != "1" or not all(query.get(k) for k in "gbkis"):
         raise ValueError("incomplete pairing code")
     return {"gateway": query["g"].rstrip("/"), "bot_id": query["b"], "bot_key": query["k"],
             "pairing_id": query["i"], "secret": query["s"]}

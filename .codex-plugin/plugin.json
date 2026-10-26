@@ -1,6 +1,6 @@
 {
   "name": "mokutori",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Receive pages scanned with the Mokutori iPad app straight in this agent.",
   "author": {
     "name": "Chekusu"

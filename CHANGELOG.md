@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.4] - 2026-10-27
+
+- Return a clickable `pair_link` alongside the QR image, using `https://mokutori.com/pair#...` with
+  all pairing parameters in the fragment and no HTTP query secrets.
+- Keep the existing `pair_url` and QR custom-scheme payload for installed scanning builds. Both entry
+  points use the same one-time secret, expiry and pairing proof.
+- Require the skill to show both image and clickable link, and only report success after a nonempty
+  `pair-check.paired` result. Document installation fallback and the absence of trusted online presence.
+- Preserve 0.2.3 owner-home migration, historical pairing records and encrypted inbox recovery.
+
 ## [0.2.3] - 2026-10-26
 
 - Restore existing `setup.owner_home` installations for pairing, inbox recovery and unpairing. Reuse the
