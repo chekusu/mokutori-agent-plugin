@@ -180,6 +180,56 @@ class PluginFlow(unittest.TestCase):
         status, _ = ipad.message("after unpair", [])
         self.assertGreaterEqual(status, 400)
 
+    def test_upgrade_reuses_external_owner_for_pair_receive_recovery_and_unpair(self):
+        setup = self.setup_agent()
+        home = plugin.Home(self.home)
+        external = self.root / (self._testMethodName + "-yobiru")
+        home.owner.rename(external)  # Move synthetic credentials, never duplicate them.
+        original_credentials = json.loads((external / "public" / "credentials.json").read_text())
+        state = home.state()
+        state["setup"]["owner_home"] = str(external)
+        state["pairings"]["0123456789ab"] = {"used_by": "actor_legacy", "expires_at": "2026-10-25T00:00:00Z"}
+        home.save(state)
+        status = self.mokutori("status")
+        self.assertEqual(status["owner_home"], str(external))
+        self.assertEqual(status["bot_id"], setup["bot_id"])
+        self.assertEqual(status["handle"], setup["handle"])
+        code = self.mokutori("pair")
+        ipad = app.App()
+        _, receipt = ipad.pair(code["pair_url"])
+        self.assertEqual(self.mokutori("pair-check")["paired"][0]["actor_id"], ipad.state["actor_id"])
+        # This direct metadata query exercises the non-CLI owner credential path.
+        self.assertEqual(plugin.owner_job_context(home, home.state()["setup"], receipt["message_id"])["state"], "completed")
+        message_id = self.send_page(ipad)
+        inbox = self.mokutori("inbox")
+        self.assertEqual(len(inbox["batches"]), 1)
+        self.assertEqual(inbox["errors"], [])
+        self.assertEqual(self.status_of(ipad, message_id)["code"], "read")
+        self.mokutori("inbox", "--ack")
+        self.assertEqual(self.mokutori("inbox")["batches"], [])
+        self.mokutori("unpair", ipad.state["actor_id"])
+        # The engine may pin newly seen peer keys in this file, but the original
+        # owner identity and credentials must remain the same.
+        current_credentials = json.loads((external / "public" / "credentials.json").read_text())
+        self.assertEqual(current_credentials["gateways"][self.url]["owner"],
+                         original_credentials["gateways"][self.url]["owner"])
+        self.assertFalse((home.default_owner / "public" / "credentials.json").exists())
+        self.assertEqual(home.state()["pairings"]["0123456789ab"], state["pairings"]["0123456789ab"])
+
+    def test_new_setup_can_reuse_an_existing_owner_without_email_or_copy(self):
+        original = self.setup_agent()
+        owner = self.home / "owner"
+        self.home = self.root / (self._testMethodName + "-second")
+        setup = self.mokutori("setup", "--gateway", self.url, "--owner-home", str(owner), "--agent", "grok")
+        self.assertNotEqual(setup["bot_id"], original["bot_id"])
+        self.assertEqual(setup["owner_home"], str(owner))
+        self.assertFalse((self.home / "owner" / "public" / "credentials.json").exists())
+        self.assertTrue(self.mokutori("setup", "--owner-home", str(owner))["already_set_up"])
+        code = self.mokutori("pair")
+        ipad = app.App()
+        ipad.pair(code["pair_url"])
+        self.assertEqual(len(self.mokutori("pair-check")["paired"]), 1)
+
     def test_muse_receives_image_and_acknowledges_without_deleting(self):
         sys.path.insert(0, str(PLUGIN))
         from muse_connector import MCPServer, Service

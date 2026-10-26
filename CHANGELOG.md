@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.3] - 2026-10-26
+
+- Restore existing `setup.owner_home` installations for pairing, inbox recovery and unpairing. Reuse the
+  original owner credential without copying it or creating symlinks; keep private-file validation.
+- Restore `setup --owner-home` for new receivers under an existing Yobiru owner, and report the selected
+  owner directory in `status`.
+- Preserve legacy pairing records that lack modern proof/job fields. Report non-secret warnings instead
+  of crashing, replaying permissions or marking an incomplete pairing successful.
+- Keep malformed or expired pairing entries from blocking new codes while retaining their history.
+- Add migration tests covering external owner reuse, credential-file restrictions, old pairing state,
+  encrypted receiving and acknowledgement.
+
 ## [0.2.2] - 2026-10-26
 
 - Fix the bundled QR generator importing on Python 3.8. QR image content and the pairing protocol are unchanged.

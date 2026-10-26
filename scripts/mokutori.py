@@ -32,7 +32,7 @@ import bot_client as B  # noqa: E402
 import bot_common as C  # noqa: E402
 import bot_e2e as E  # noqa: E402
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 DEFAULT_GATEWAY = "https://bots.yobiru.com"
 PAIR_PREFIX = "mokutori-pair/1"
 PAIR_SCHEME = "mokutori"
@@ -91,14 +91,33 @@ class Home:
 
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
-        self.owner, self.reader, self.inbox = self.path / "owner", self.path / "reader", self.path / "inbox"
+        self.default_owner = self.path / "owner"
+        self.reader, self.inbox = self.path / "reader", self.path / "inbox"
         self.claims = self.path / "claims"
         self.state_file = self.path / "state.json"
 
     def ensure(self):
-        for folder in (self.path, self.owner, self.reader, self.inbox, self.claims):
+        # Only manage Mokutori's own folders. A legacy installation may reuse
+        # an existing Yobiru owner home; never create or chmod that directory.
+        for folder in (self.path, self.default_owner, self.reader, self.inbox, self.claims):
             folder.mkdir(parents=True, exist_ok=True)
             os.chmod(str(folder), 0o700)
+
+    @property
+    def owner(self):
+        setup = self.state().get("setup") or {}
+        if "owner_home" not in setup:
+            return self.default_owner
+        raw = setup["owner_home"]
+        if not isinstance(raw, str) or not raw.strip():
+            raise MokutoriError("setup.owner_home must name the existing absolute Yobiru data directory")
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            raise MokutoriError("setup.owner_home must be an absolute path; the original directory was not changed")
+        if not path.is_dir():
+            raise MokutoriError("configured owner_home is unavailable; restore access to the original Yobiru "
+                                "directory without copying credentials, creating links or running setup --force")
+        return path
 
     def state(self):
         try:
@@ -112,7 +131,11 @@ class Home:
 
     def credentials(self, which):
         path = getattr(self, which) / "public" / "credentials.json"
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            return C.read_json_file(path, private=True, what="credentials.json")
+        except ValueError:
+            raise MokutoriError("owner/reader credentials must be a readable private regular file in the "
+                                "configured data directory; credential links are not supported")
 
 
 def engine(home_dir, *args, check=True):
@@ -146,6 +169,19 @@ def cmd_setup(home, a):
         out({"ok": True, "already_set_up": True, **status_view(home, state)})
     home.ensure()
     gateway = C.normalize_base_url(a.gateway or DEFAULT_GATEWAY)
+    if a.owner_home:
+        owner = Path(a.owner_home).expanduser().absolute()
+        try:
+            credentials = C.read_json_file(owner / "public" / "credentials.json", private=True,
+                                           what="credentials.json")
+            token = ((credentials.get("gateways") or {}).get(gateway, {}).get("owner") or {}).get("token")
+        except (ValueError, AttributeError):
+            token = None
+        if not token or C.token_kind(token) != "owner":
+            raise MokutoriError("the selected owner home has no usable private owner credential for this gateway")
+        created = engine(owner, "bot", "create", "--handle", a.handle or "mokutori-" + secrets.token_hex(3),
+                         "--name", a.name, "--no-source", "--gateway", gateway)
+        finish_setup(home, state, a, gateway, owner, created.get("bot_id"))
     if a.email and not a.email_code:
         result = engine(home.owner, "enroll-bot", gateway, "--name", a.name, "--email", a.email,
                         *(["--lang", a.lang] if a.lang else []))
@@ -161,12 +197,16 @@ def cmd_setup(home, a):
         args += ["--email-code", a.email_code]
     enrolled = engine(home.owner, *args)
     bot_id = enrolled.get("bot_id") or (enrolled.get("bot") or {}).get("bot_id")
+    finish_setup(home, state, a, gateway, home.owner, bot_id)
+
+
+def finish_setup(home, state, a, gateway, owner, bot_id):
     if not bot_id:
         raise MokutoriError("the gateway did not return a bot id")
-    engine(home.owner, "bot", "publish", bot_id, "--gateway", gateway, check=False)
+    engine(owner, "bot", "publish", bot_id, "--gateway", gateway, check=False)
     token_file = home.path / "reader.token"
     try:
-        engine(home.owner, "worker", "bind", bot_id, "--adapter", "native", "--label", "Mokutori reader",
+        engine(owner, "worker", "bind", bot_id, "--adapter", "native", "--label", "Mokutori reader",
                "--host", binding_host(a.agent), "--token-file", str(token_file), "--gateway", gateway)
         engine(home.reader, "worker", "login", gateway, "--token-file", str(token_file))
     finally:
@@ -176,19 +216,79 @@ def cmd_setup(home, a):
     card = C.api_call(gateway, "GET", "/@" + bot_id)[1]
     state["setup"] = {"gateway": gateway, "bot_id": bot_id, "handle": card.get("handle"),
                       "bot_key": (card.get("e2e") or {}).get("key"), "set_up_at": iso(now())}
+    if owner != home.default_owner:
+        state["setup"]["owner_home"] = str(owner)
     home.save(state)
     out({"ok": True, **status_view(home, state),
          "next": "Run `mokutori pair` and scan the QR code with the iPad."})
 
 
+def pairing_state(pairing):
+    """Classify saved pairing records without upgrading old evidence into a verified proof.
+
+    Early releases stored only `used_by` after pairing. Those records are history,
+    not interrupted modern jobs: they must never be replayed through finish_pairing.
+    """
+    if not isinstance(pairing, dict):
+        return "invalid"
+    if pairing.get("revoked"):
+        return "revoked"
+    if pairing.get("proof_finished"):
+        return "finished"
+    if pairing.get("used_by"):
+        if not isinstance(pairing.get("used_by"), str):
+            return "invalid"
+        if (not isinstance(pairing.get("proof_job_id"), str)
+                or re.fullmatch(r"msg_[a-z2-7]{16}", pairing["proof_job_id"]) is None
+                or not isinstance(pairing.get("device"), dict)
+                or not isinstance(pairing["device"].get("e2e_key"), str)
+                or not pairing["device"]["e2e_key"]):
+            return "legacy_used"
+        if not valid_pairing_secret(pairing.get("secret")):
+            return "invalid"
+        # Once verified and reserved, an interrupted admission may finish after
+        # the QR expires; its original sender and job stay fixed.
+        return "resumable"
+    if not valid_pairing_secret(pairing.get("secret")):
+        return "invalid"
+    expiry = pairing.get("expires_at")
+    if not isinstance(expiry, str):
+        return "invalid"
+    try:
+        timestamp = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            return "invalid"
+        return "pending" if timestamp > now() else "expired"
+    except ValueError:
+        return "invalid"
+
+
+def valid_pairing_secret(value):
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{43}", value) is not None
+
+
+def pairing_warnings(state):
+    """Non-secret diagnostics; leave historical records and received pages intact."""
+    warnings = []
+    for pairing_id, pairing in state.get("pairings", {}).items():
+        classification = pairing_state(pairing)
+        if classification in ("legacy_used", "invalid"):
+            warnings.append({"pairing_id": pairing_id, "code": "legacy_pairing_not_resumable"
+                             if classification == "legacy_used" else "invalid_pairing_record",
+                             "note": "Preserved without replay. Existing devices and received pages are unchanged; "
+                                     "use a fresh QR if this device still needs pairing."})
+    return warnings
+
+
 def status_view(home, state):
     setup = state.get("setup") or {}
-    return {"home": str(home.path), "gateway": setup.get("gateway"), "bot_id": setup.get("bot_id"),
+    return {"home": str(home.path), "owner_home": str(home.owner),
+            "gateway": setup.get("gateway"), "bot_id": setup.get("bot_id"),
             "handle": setup.get("handle"),
             "bot_key_fingerprint": E.fingerprint(setup["bot_key"]) if setup.get("bot_key") else None,
             "devices": [dict(device, actor_id=actor) for actor, device in state.get("devices", {}).items()],
-            "pending_pairings": sum(1 for p in state.get("pairings", {}).values() if not p.get("used_by")
-                                    and p["expires_at"] > iso(now()))}
+            "pending_pairings": sum(1 for p in state.get("pairings", {}).values() if pairing_state(p) == "pending"),
+            "pairing_warnings": pairing_warnings(state)}
 
 
 def cmd_status(home, a):
@@ -255,8 +355,9 @@ def cmd_pair(home, a):
     setup = require_setup(state)
     pairing_id, secret = secrets.token_hex(6), b64u(os.urandom(32))
     expires = now() + dt.timedelta(minutes=a.minutes)
-    state["pairings"] = {k: v for k, v in state.get("pairings", {}).items()
-                         if v.get("used_by") or v["expires_at"] > iso(now())}
+    # Keep old/expired records as history; compatibility must not erase them or
+    # pretend an old used_by marker carries a modern verified proof job.
+    state.setdefault("pairings", {})
     state["pairings"][pairing_id] = {"secret": secret, "created_at": iso(now()), "expires_at": iso(expires),
                                      "label": a.label}
     home.save(state)
@@ -269,7 +370,8 @@ def cmd_pair(home, a):
               "show_owner": "Show the QR image to the owner. They hold it under the iPad on the scanning stand "
                             "(or scan it with the iPad's Camera app). It works once and expires in %d minutes; "
                             "never post it anywhere else." % a.minutes,
-              "next": "Run `mokutori pair-check --wait 120` to finish pairing."}
+              "next": "Run `mokutori pair-check --wait 120` to finish pairing.",
+              "pairing_warnings": pairing_warnings(state)}
     if a.terminal:
         result["qr_text"] = terminal_qr(matrix)
     if a.wait:
@@ -281,6 +383,8 @@ def finish_pairing(home, state, pairing_id):
     """Resume an already verified pairing; reserve the one-time code before changing gateway permissions."""
     setup = require_setup(state)
     pairing = state["pairings"][pairing_id]
+    if pairing_state(pairing) != "resumable":
+        raise MokutoriError("saved pairing has no resumable verified proof; preserve it and generate a fresh QR")
     sender, job_id = pairing["used_by"], pairing["proof_job_id"]
     if not pairing.get("admitted"):
         engine(home.owner, "owner", "contact", setup["bot_id"], sender, "grant", "--capabilities", CAPABILITIES,
@@ -313,7 +417,7 @@ def check_pairings(home, wait=0):
         state = home.state()
         setup = require_setup(state)
         for pairing_id, pairing in state.get("pairings", {}).items():
-            if pairing.get("used_by") and not pairing.get("proof_finished") and not pairing.get("revoked"):
+            if pairing_state(pairing) == "resumable":
                 paired.append(finish_pairing(home, state, pairing_id))
         reviews = engine(home.owner, "review", "list", setup["bot_id"], "--gateway", setup["gateway"])
         for item in reviews.get("inbound", []):
@@ -327,7 +431,7 @@ def check_pairings(home, wait=0):
                     or content.get("attachments") or (item.get("attachments_pending") or {}).get("count", 0)):
                 continue
             pairing = state.get("pairings", {}).get(proof[1])
-            if (pairing is None or pairing.get("used_by") or pairing["expires_at"] <= iso(now())
+            if (pairing_state(pairing) != "pending"
                     or not hmac.compare_digest(proof[2], pairing_proof(pairing["secret"], proof[1], setup["bot_id"], sender))):
                 continue
             pairing.update(used_by=sender, proof_job_id=validated_job_id(item.get("job_id")), device={
@@ -342,7 +446,7 @@ def check_pairings(home, wait=0):
 
 def cmd_pair_check(home, a):
     paired = check_pairings(home, wait=a.wait)
-    out({"ok": True, "paired": paired,
+    out({"ok": True, "paired": paired, "pairing_warnings": pairing_warnings(home.state()),
          "note": "Paired: pages scanned on this iPad now arrive in `mokutori inbox`." if paired
          else "No iPad has paired yet. The QR code must be scanned within its expiry time."})
 
@@ -359,7 +463,7 @@ def cmd_unpair(home, a):
     engine(home.owner, "owner", "contact", setup["bot_id"], a.actor_id, "block", "--gateway", setup["gateway"])
     state["devices"].pop(a.actor_id)
     for pairing in state.get("pairings", {}).values():
-        if pairing.get("used_by") == a.actor_id:
+        if isinstance(pairing, dict) and pairing.get("used_by") == a.actor_id:
             pairing["revoked"] = True
     home.save(state)
     out({"ok": True, "unpaired": a.actor_id, "note": "Blocked at the gateway; pages already saved stay here."})
@@ -558,7 +662,8 @@ def recover_completed_cache(home, state, setup, listed_ids, only_id=None):
         if context.get("state") == "completed" and context.get("actor_id") == sender:
             try:
                 pairing_id = next((key for key, pairing in state.get("pairings", {}).items()
-                                   if pairing.get("proof_job_id") == job_id and pairing.get("used_by") == sender
+                                   if isinstance(pairing, dict) and pairing.get("proof_job_id") == job_id
+                                   and pairing.get("used_by") == sender
                                    and pairing.get("admitted") and not pairing.get("revoked")), None)
                 receive_job(home, state, setup, cached, pairing_id=pairing_id, cached_finished=True)
             except MokutoriError as error:
@@ -630,6 +735,8 @@ def main(argv=None):
     p.add_argument("--lang", choices=("en", "zh", "ja"))
     p.add_argument("--agent", default="other", choices=("grok", "codex", "claude_code", "cursor", "muse", "other"),
                    help="which agent reads the pages here")
+    p.add_argument("--owner-home", help="reuse the owner in an existing Yobiru data home for a new setup; "
+                                        "existing setups automatically retain setup.owner_home")
     p.add_argument("--force", action="store_true")
     sub.add_parser("status", help="setup, paired iPads and open pairings")
     p = sub.add_parser("pair", help="make a one-time QR code for the iPad")

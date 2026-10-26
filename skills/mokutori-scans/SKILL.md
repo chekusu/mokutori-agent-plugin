@@ -18,6 +18,13 @@ The command is `scripts/mokutori` in this plugin, two folders above this file
 use the same one (pass `--home DIR` before the command if you need another). Never print or send its
 contents: it holds this agent's credentials.
 
+When upgrading an existing installation, preserve its data home and `state.json`, including
+`setup.owner_home` if present. Version 0.2.3 reuses that existing Yobiru owner directory directly;
+`status` reports `home`, `owner_home` and `bot_id` for verification. Do not copy credentials, create
+credential symlinks, run `setup --force`, or create another bot to repair an upgrade. If `pairing_warnings`
+reports an old record, preserve it and its backups; never mark it accepted manually. An old record without
+modern proof metadata is not replayed. Generate a fresh QR if the device still needs pairing.
+
 ## First time: set up
 
 `sh M status` shows whether setup is done. If not, set it up with the owner's permission:
@@ -25,6 +32,10 @@ contents: it holds this agent's credentials.
 1. `sh M setup --email OWNER_EMAIL --agent grok|codex|claude_code|other` mails a 6-digit code to the
    owner (the official gateway verifies one email per owner). Ask the owner for their email; never guess it.
 2. `sh M setup --email-code CODE --agent ...` with the code the owner gives you. Optional `--handle NAME`.
+
+If the owner already has a Yobiru owner credential, an authorized **new** setup can instead use
+`sh M setup --owner-home /absolute/YOBIRU_HOME --agent ...`. This keeps the owner credential in its
+original directory. Existing setups automatically use their saved location and do not need this command.
 
 ## Pair an iPad
 

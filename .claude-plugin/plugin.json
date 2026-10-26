@@ -1,6 +1,6 @@
 {
   "name": "mokutori",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Receive pages scanned with the Mokutori iPad app straight in this agent: pair with a QR code, then read each batch of corrected page images and OCR text.",
   "author": {
     "name": "Chekusu"
