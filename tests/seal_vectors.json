@@ -1,0 +1,73 @@
+{
+  "sender_secret": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+  "sender_public": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
+  "bot_public": "VxR2nRFr92Q2rnS8eT0sMK0ZA8WaxSc4BcfiaYtBDDY",
+  "seed": "yMnKy8zNzs_Q0dLT1NXW19jZ2tvc3d7f4OHi4-Tl5uc",
+  "bind": {
+    "bot_id": "bot_c7yukjbczvso3en6",
+    "caller": "act_kgxahgjsqa5hgwuh",
+    "conversation_id": "cnv_pj5ptqtj57m2kqpz"
+  },
+  "text": "Mokutori 扫描 · 第 1–2 页\n第 1 页：ready\n\t\"quoted\" \\ back\u0001slash /",
+  "attachments": [
+    {
+      "name": "page-001.jpg",
+      "data": "/9j/AAEC"
+    },
+    {
+      "name": "ocr-001-002.md",
+      "content": "## 第 1 页\n\n領収書 ￥1,280\n"
+    }
+  ],
+  "attachment_bytes": 39,
+  "expected_fields": {
+    "sealed": {
+      "v": 1,
+      "alg": "x25519-chacha20poly1305",
+      "from": "0ac0b901d23fe33a66703715944c7b3d",
+      "n": "l-5nzgZKDeCkYhsZ",
+      "ct": "pctRJy_MSrg93MkF1_fjl6wlMRyhV3hRQ5UfMFF4Vu4TJZBvxDWtUEbpnhDq1cqNzW9u68oQxxTbzm2ZJCuzw73IVkvrFnzV6Qr9fM6SZVbsuJ-Se7MdmcYEceC_b3dCZNdx9PycdzcuShJxS2hkDMJ9C6Dl91Q_zoTLnCpDsQqG2tDO547JIW-PYTN3QAMXfhI4yS9yvreewvPHs1bxxz4Oln5JIJdCbWTHUkPWeh1zrJENVCVjAJeBEJh5yDa2Llu3NjyziKVRiUu-dhTbUBz-AJXorVdGHBS-wY8wPrqFPiU9ix8eURSMYdL0UhKXdPeo-uqRxA",
+      "to": [
+        {
+          "kid": "86e436073ef50a7d51a3094abe6182e2",
+          "epk": "7wvQvWU3ggYS7g9VrqX011Fl3mCyE9qSgladj-b4ESc",
+          "k": "xLmh6e3IcUfhq6VeoL7hYXsLLOZlYgNBei58fevGUDa0WJp2106ix6dzuAJYwgvH"
+        },
+        {
+          "kid": "0ac0b901d23fe33a66703715944c7b3d",
+          "epk": "TjvTnWqX0-iZFtUuG9oaACN4-gLucLY03wXHmVWufkI",
+          "k": "hBiM_StophifGvPVO-J4-S2-4mzlUN1CDwW49gnJxbJCyHn8eOYb8NAjp84O8XoF"
+        }
+      ]
+    },
+    "sealed_files": {
+      "v": 1,
+      "alg": "x25519-chacha20poly1305",
+      "from": "0ac0b901d23fe33a66703715944c7b3d",
+      "n": "edMg4Fnl6ufGzgfS",
+      "ct": "5iGqiSP14j-lLVAAc0z_GFcBy_wkVuMQSc6MWgPiUjhVsfdQfJ4SzVAffhu0ohGSKl_9lCmwAE0vggg0VUtCdtN2AoRYFfOL-FjN7XJl3zELldP15aynAGrh34bB1Ly-_RmtEW9roOBksbFUnBHBXCXOcDGPHSuHoQ-3F7eNn9AkJY7WAJEGM8aYuNYm0QkpC6vqga3LzoYgI-70o0BIxp49_N5J_OXBQ5rt8KXxsM6LEaUdhDDyfndmlZWhVO_N9BcuODxA9lSzBjsryeYovEiUnmdDp6kwO8ICy4USy33na0vn9JzcG2SlUPlHeyQUWIgqH_-xvX0YX_hwAkVZO0hYFGQnDxxIXIYPqFcpu51M1X0dUFKzGzsMuPFUUA",
+      "to": [
+        {
+          "kid": "86e436073ef50a7d51a3094abe6182e2",
+          "epk": "--2sUuo1Y1VtHUF4xSWn5kN5wNydsixqcx1CztiG_hM",
+          "k": "Mmh7AU7JY2r21dCr3-CvbRJBMTfM-P3HgF9-eFUBaujfVt3D5G7fH79m19ftNw6N"
+        },
+        {
+          "kid": "0ac0b901d23fe33a66703715944c7b3d",
+          "epk": "YJxxPO8Km4xHBAmYm-KBDQwrDiHmELkqa17TOR-PoDY",
+          "k": "mxgBH8RcynTKM-Y6Jz12Bl9ZEJSMhtwaQVKuudBTEsiuuYK2twtjWy_t48ly4kJo"
+        }
+      ]
+    },
+    "files": {
+      "count": 2,
+      "bytes": 39
+    }
+  },
+  "expected_fields_canonical": "{\"files\":{\"bytes\":39,\"count\":2},\"sealed\":{\"alg\":\"x25519-chacha20poly1305\",\"ct\":\"pctRJy_MSrg93MkF1_fjl6wlMRyhV3hRQ5UfMFF4Vu4TJZBvxDWtUEbpnhDq1cqNzW9u68oQxxTbzm2ZJCuzw73IVkvrFnzV6Qr9fM6SZVbsuJ-Se7MdmcYEceC_b3dCZNdx9PycdzcuShJxS2hkDMJ9C6Dl91Q_zoTLnCpDsQqG2tDO547JIW-PYTN3QAMXfhI4yS9yvreewvPHs1bxxz4Oln5JIJdCbWTHUkPWeh1zrJENVCVjAJeBEJh5yDa2Llu3NjyziKVRiUu-dhTbUBz-AJXorVdGHBS-wY8wPrqFPiU9ix8eURSMYdL0UhKXdPeo-uqRxA\",\"from\":\"0ac0b901d23fe33a66703715944c7b3d\",\"n\":\"l-5nzgZKDeCkYhsZ\",\"to\":[{\"epk\":\"7wvQvWU3ggYS7g9VrqX011Fl3mCyE9qSgladj-b4ESc\",\"k\":\"xLmh6e3IcUfhq6VeoL7hYXsLLOZlYgNBei58fevGUDa0WJp2106ix6dzuAJYwgvH\",\"kid\":\"86e436073ef50a7d51a3094abe6182e2\"},{\"epk\":\"TjvTnWqX0-iZFtUuG9oaACN4-gLucLY03wXHmVWufkI\",\"k\":\"hBiM_StophifGvPVO-J4-S2-4mzlUN1CDwW49gnJxbJCyHn8eOYb8NAjp84O8XoF\",\"kid\":\"0ac0b901d23fe33a66703715944c7b3d\"}],\"v\":1},\"sealed_files\":{\"alg\":\"x25519-chacha20poly1305\",\"ct\":\"5iGqiSP14j-lLVAAc0z_GFcBy_wkVuMQSc6MWgPiUjhVsfdQfJ4SzVAffhu0ohGSKl_9lCmwAE0vggg0VUtCdtN2AoRYFfOL-FjN7XJl3zELldP15aynAGrh34bB1Ly-_RmtEW9roOBksbFUnBHBXCXOcDGPHSuHoQ-3F7eNn9AkJY7WAJEGM8aYuNYm0QkpC6vqga3LzoYgI-70o0BIxp49_N5J_OXBQ5rt8KXxsM6LEaUdhDDyfndmlZWhVO_N9BcuODxA9lSzBjsryeYovEiUnmdDp6kwO8ICy4USy33na0vn9JzcG2SlUPlHeyQUWIgqH_-xvX0YX_hwAkVZO0hYFGQnDxxIXIYPqFcpu51M1X0dUFKzGzsMuPFUUA\",\"from\":\"0ac0b901d23fe33a66703715944c7b3d\",\"n\":\"edMg4Fnl6ufGzgfS\",\"to\":[{\"epk\":\"--2sUuo1Y1VtHUF4xSWn5kN5wNydsixqcx1CztiG_hM\",\"k\":\"Mmh7AU7JY2r21dCr3-CvbRJBMTfM-P3HgF9-eFUBaujfVt3D5G7fH79m19ftNw6N\",\"kid\":\"86e436073ef50a7d51a3094abe6182e2\"},{\"epk\":\"YJxxPO8Km4xHBAmYm-KBDQwrDiHmELkqa17TOR-PoDY\",\"k\":\"mxgBH8RcynTKM-Y6Jz12Bl9ZEJSMhtwaQVKuudBTEsiuuYK2twtjWy_t48ly4kJo\",\"kid\":\"0ac0b901d23fe33a66703715944c7b3d\"}],\"v\":1}}",
+  "bot_kid": "86e436073ef50a7d51a3094abe6182e2",
+  "bot_fingerprint": "86e4 3607 3ef5 0a7d 51a3 094a be61 82e2",
+  "pair_url": "mokutori://pair?v=1&g=https%3A%2F%2Fbots.yobiru.com&b=bot_c7yukjbczvso3en6&k=VxR2nRFr92Q2rnS8eT0sMK0ZA8WaxSc4BcfiaYtBDDY&i=0a1b2c3d4e5f&s=MjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFE",
+  "pair_actor": "act_kgxahgjsqa5hgwuh",
+  "pair_proof_text": "mokutori-pair/1 0a1b2c3d4e5f Mq4R-EBd70XzawCjfZ8RoM6aJU_fycTVp0bjBdk20gk"
+}

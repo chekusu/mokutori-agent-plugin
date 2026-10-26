@@ -1,0 +1,13 @@
+#!/bin/sh
+# Mokutori launcher: runs mokutori.py next to this file with python3 (or $MOKUTORI_PYTHON). Python 3.8+.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self") || break
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd -P) || exit 2
+py=${MOKUTORI_PYTHON:-python3}
+exec "$py" "$here/mokutori.py" "$@"

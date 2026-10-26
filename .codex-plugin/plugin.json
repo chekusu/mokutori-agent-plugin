@@ -1,0 +1,24 @@
+{
+  "name": "mokutori",
+  "version": "0.2.0",
+  "description": "Receive pages scanned with the Mokutori iPad app straight in this agent.",
+  "author": {
+    "name": "Chekusu"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Mokutori",
+    "shortDescription": "Scanned pages from your iPad, in this agent",
+    "longDescription": "Pair the Mokutori iPad app with a one-time QR code. Pages scanned on the stand arrive here in batches, end-to-end encrypted: corrected page images plus OCR text, saved to a private folder.",
+    "developerName": "Chekusu",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "defaultPrompt": [
+      "连接我的 Mokutori iPad",
+      "看看 Mokutori 新扫描的页面"
+    ]
+  }
+}
