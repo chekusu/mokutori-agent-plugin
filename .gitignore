@@ -22,3 +22,7 @@ mokutori-agent/
 pairing-*.png
 qr-*.png
 *.log
+.env
+.env.*
+*.token
+*.key

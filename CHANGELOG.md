@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1] - 2026-10-26
+
+- Included the optional self-hosted Muse MCP bridge for scan listing, image retrieval and local acknowledgement.
+- Added `setup --agent muse` while preserving the existing pairing and encrypted-claim recovery behavior.
+- Added connector tests and a synthetic end-to-end CLI-to-MCP scan test.
+- Added public source and security links and corrected installation guidance to retain the full plugin folder.
+
 ## [0.2.0] - 2026-10-26
 
 - Renamed the public pairing URI to `mokutori://pair` and the proof prefix to `mokutori-pair/1`.

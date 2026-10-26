@@ -32,7 +32,7 @@ import bot_client as B  # noqa: E402
 import bot_common as C  # noqa: E402
 import bot_e2e as E  # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DEFAULT_GATEWAY = "https://bots.yobiru.com"
 PAIR_PREFIX = "mokutori-pair/1"
 PAIR_SCHEME = "mokutori"
@@ -41,6 +41,11 @@ CTX = "yobiru-e2e/1"
 CAPABILITIES = "chat,files"
 MEDIA_EXT = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\Z")
+
+
+def binding_host(agent):
+    """Muse reaches the native worker through its separate MCP bridge."""
+    return "other" if agent == "muse" else agent
 
 
 class MokutoriError(Exception):
@@ -162,7 +167,7 @@ def cmd_setup(home, a):
     token_file = home.path / "reader.token"
     try:
         engine(home.owner, "worker", "bind", bot_id, "--adapter", "native", "--label", "Mokutori reader",
-               "--host", a.agent, "--token-file", str(token_file), "--gateway", gateway)
+               "--host", binding_host(a.agent), "--token-file", str(token_file), "--gateway", gateway)
         engine(home.reader, "worker", "login", gateway, "--token-file", str(token_file))
     finally:
         for leftover in (token_file, Path(str(token_file) + ".e2e")):
@@ -623,7 +628,7 @@ def main(argv=None):
     p.add_argument("--email", help="step one on gateways that verify email: mail the owner a code")
     p.add_argument("--email-code", help="step two: the 6-digit code from that email")
     p.add_argument("--lang", choices=("en", "zh", "ja"))
-    p.add_argument("--agent", default="other", choices=("grok", "codex", "claude_code", "cursor", "other"),
+    p.add_argument("--agent", default="other", choices=("grok", "codex", "claude_code", "cursor", "muse", "other"),
                    help="which agent reads the pages here")
     p.add_argument("--force", action="store_true")
     sub.add_parser("status", help="setup, paired iPads and open pairings")

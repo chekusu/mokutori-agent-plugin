@@ -5,6 +5,7 @@ The gateway comes from a Yobiru source checkout ($YOBIRU_SOURCE, default ../yobi
 protocol in tests/app_protocol_reference.py.
 """
 import json
+import base64
 from contextlib import closing
 import hashlib
 import importlib.util
@@ -66,10 +67,10 @@ class PluginFlow(unittest.TestCase):
     def setUp(self):
         self.home = self.root / self._testMethodName
 
-    def setup_agent(self):
+    def setup_agent(self, agent="other"):
         return self.mokutori("setup", "--gateway", self.url,
                             "--handle", "mokutori-" + hashlib.sha256(self._testMethodName.encode()).hexdigest()[:8],
-                            "--name", "Mokutori")
+                            "--name", "Mokutori", "--agent", agent)
 
     @classmethod
     def tearDownClass(cls):
@@ -94,8 +95,8 @@ class PluginFlow(unittest.TestCase):
                  "warnings": [] if i else ["lowContrast"], "text": "第 %d 页 領収書 合計 ￥1,280" % (start + i),
                  "jpeg": jpeg} for i in range(count)]
 
-    def paired_device(self):
-        setup = self.setup_agent()
+    def paired_device(self, agent="other"):
+        setup = self.setup_agent(agent)
         pairing = self.mokutori("pair")
         ipad = app.App()
         status, receipt = ipad.pair(pairing["pair_url"])
@@ -178,6 +179,39 @@ class PluginFlow(unittest.TestCase):
         self.mokutori("unpair", ipad.state["actor_id"])
         status, _ = ipad.message("after unpair", [])
         self.assertGreaterEqual(status, 400)
+
+    def test_muse_receives_image_and_acknowledges_without_deleting(self):
+        sys.path.insert(0, str(PLUGIN))
+        from muse_connector import MCPServer, Service
+
+        _, ipad, _ = self.paired_device(agent="muse")
+        message_id = self.send_page(ipad)
+        server = MCPServer(Service(self.home), "synthetic-test-key-not-a-production-key")
+        server.dispatch({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})
+        server.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+        def call_tool(name, arguments):
+            response = server.dispatch({"jsonrpc": "2.0", "id": name, "method": "tools/call",
+                                        "params": {"name": name, "arguments": arguments}})
+            self.assertNotIn("error", response)
+            self.assertFalse(response["result"]["isError"], response)
+            return response["result"]
+
+        inbox = call_tool("mokutori_list_scans", {"limit": 1})
+        self.assertNotIn(str(self.home), json.dumps(inbox))
+        self.assertEqual(inbox["structuredContent"]["ingestion_error_count"], 0)
+        batch = inbox["structuredContent"]["batches"][0]
+        self.assertEqual(batch["notice_id"], message_id)
+        self.assertIn("領収書", batch["ocr_markdown"])
+        image_file = next(item for item in batch["files"] if item["kind"] == "image")
+        image = call_tool("mokutori_get_scan_image", {"notice_id": message_id, "name": image_file["name"]})
+        self.assertEqual(base64.b64decode(image["content"][1]["data"]), self.pages(1)[0]["jpeg"])
+        ack = call_tool("mokutori_acknowledge_scans", {"notice_ids": [message_id]})
+        self.assertEqual(ack["structuredContent"]["acknowledged"], [message_id])
+        self.assertEqual(call_tool("mokutori_list_scans", {})["structuredContent"]["batches"], [])
+        self.assertEqual(call_tool("mokutori_get_scan_image", {"notice_id": message_id,
+                                                               "name": image_file["name"]})["content"], image["content"])
+        self.assertEqual(self.status_of(ipad, message_id)["code"], "read")
 
     def test_resume_saved_claim_uses_start_without_reclaim(self):
         setup, ipad, _ = self.paired_device()

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Local launcher for the optional Muse MCP connector.
+exec "${PYTHON:-python3}" "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/muse_connector.py" "$@"

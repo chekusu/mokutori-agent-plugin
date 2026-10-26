@@ -1,0 +1,63 @@
+name: Plugin and Muse tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.12"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    defaults:
+      run:
+        working-directory: plugin
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: plugin
+          persist-credentials: false
+      - name: Check out pinned public gateway source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: chekusu/yobiru
+          ref: 2909af49c0f521fda536e288f47a66cc9f770cfd
+          path: yobiru
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Check syntax, versions and gateway pin
+        run: |
+          python - <<'PY'
+          import ast
+          import json
+          import pathlib
+          import re
+          import subprocess
+          root = pathlib.Path('.')
+          for path in root.rglob('*.py'):
+              ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+          versions = {
+              json.loads((root / path).read_text())['version']
+              for path in ('plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json')
+          }
+          cli = (root / 'scripts/mokutori.py').read_text()
+          versions.add(re.search(r'^VERSION = "([^"]+)"', cli, re.M).group(1))
+          assert len(versions) == 1, 'Plugin versions differ: %r' % versions
+          pin = json.loads((root / 'scripts/engine/SOURCE.json').read_text())
+          head = subprocess.check_output(['git', '-C', '../yobiru', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == pin['commit'], 'Gateway checkout differs from SOURCE.json'
+          PY
+      - name: Run all plugin and Muse tests with an isolated gateway
+        run: python tests/run_e2e.py ../yobiru
