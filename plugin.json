@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "mokutori",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Receive pages scanned with the Mokutori iPad app straight in this agent: pair with a QR code, then read each batch of corrected page images and OCR text.",
   "author": {
     "name": "Chekusu"

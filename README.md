@@ -4,7 +4,7 @@ Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok
 any agent that can run a shell command. Muse connects through the included optional MCP bridge.
 No computer or desktop app is needed on the scanning side.
 
-**Current plugin version: 0.2.1**
+**Current plugin version: 0.2.2**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·

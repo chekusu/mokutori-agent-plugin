@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.2] - 2026-10-26
+
+- Fix the bundled QR generator importing on Python 3.8. QR image content and the pairing protocol are unchanged.
+
 ## [0.2.1] - 2026-10-26
 
 - Included the optional self-hosted Muse MCP bridge for scan listing, image retrieval and local acknowledgement.

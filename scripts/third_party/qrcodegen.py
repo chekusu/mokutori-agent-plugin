@@ -877,7 +877,9 @@ class QrSegment:
 
 # ---- Private helper class ----
 
-class _BitBuffer(list[int]):
+# Mokutori compatibility patch: base classes are evaluated even with future annotations.
+# Plain list preserves the same runtime behavior on Python 3.8.
+class _BitBuffer(list):
 	"""An appendable sequence of bits (0s and 1s). Mainly used by QrSegment."""
 
 	def append_bits(self, val: int, n: int) -> None:
