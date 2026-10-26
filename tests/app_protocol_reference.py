@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reference of the iPad app's agent relay protocol, used to test the Mokutori agent plugin.
 
-Mitori/Agent/*.swift implements the same steps: parse the pairing QR, enroll a pseudonymous caller at the
+The separately maintained iPad app implements the same steps: parse the pairing QR, enroll a pseudonymous caller at the
 gateway, prove the pairing with a sealed chat message, then send each batch of finished pages as one sealed chat message
 (page images plus OCR markdown). Sealing uses Yobiru's reference bot_e2e.py (bundled with the plugin engine).
 """

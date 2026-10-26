@@ -65,23 +65,23 @@ sh scripts/mokutori devices | unpair ACT_ID | status
 ## Under the hood
 
 The transport is the Yobiru 0.7.14 Friends jobs protocol, pinned to the exact official source revision in
-`engine/SOURCE.json`. This plugin does not use the retired notice inbox. `scripts/engine/` is an unmodified copy of the Yobiru
-public-bot client (MIT, see `engine/LICENSE` and `engine/SOURCE.json`); `scripts/third_party/qrcodegen.py` is
+`scripts/engine/SOURCE.json`. This plugin does not use the retired notice inbox. `scripts/engine/` is an unmodified copy of the Yobiru
+public-bot client (MIT, see `scripts/engine/LICENSE` and `scripts/engine/SOURCE.json`); `scripts/third_party/qrcodegen.py` is
 Project Nayuki's QR Code generator (MIT). The agent owns a bot on the gateway with two local identities:
 an owner credential (accepts paired iPads) and a native reader binding (claims and reads jobs). The iPad is a
 pseudonymous caller; after pairing it is a trusted contact allowed to send files.
 
 Pairings use `mokutori://pair` and `mokutori-pair/1`. The app and plugin validate this scheme and proof prefix.
 
-The iPad side is in `Mitori/Agent/` of this repository. `Tests/AgentRelay/app_protocol_reference.py` is a
-Python reference of the same protocol, and `tests/test_mokutori_plugin.py` runs the whole flow (setup,
+The iPad app is maintained separately. `tests/app_protocol_reference.py` is a self-contained
+Python reference of its pairing and delivery protocol, and `tests/test_mokutori_plugin.py` runs the whole flow (setup,
 QR pairing, a forged and a replayed pairing, a sealed three-page batch, inbox, acknowledgement, unpair)
 against a real local gateway. The runner archives the pinned commit from an existing local Yobiru Git
 repository and uses fresh temporary gateway and identity folders. This revision has 16 tests; the pinned
 runner executes all 16 without skips. It does not contact a production gateway:
 
 ```sh
-python3 agent-plugins/mokutori/tests/run_e2e.py /path/to/yobiru
+python3 tests/run_e2e.py /path/to/yobiru
 ```
 
 Receiving claims a job, verifies its sender and encryption binding, saves its files and a private local receipt,
@@ -99,7 +99,13 @@ that device; previously saved pages remain available.
 Limits: an agent learns about new pages only when it runs `inbox` (or a scheduled task does); waking an
 idle hosted agent is not automatic. The official gateway stores sealed messages for up to 30 days.
 
-Test image: `tests/synthetic-page.jpg` is a 32×32 downsample of this repository's generated
-`Mitori/Resources/Fixtures/synthetic-flat.png`, produced with
-`sips -z 32 32 -s format jpeg Mitori/Resources/Fixtures/synthetic-flat.png --out agent-plugins/mokutori/tests/synthetic-page.jpg`.
-It contains no user scan or personal metadata.
+Test image: `tests/synthetic-page.jpg` is a 32×32 downsample of the iPad project's generated
+`synthetic-flat.png` fixture. It contains no user scan or personal metadata. `tests/seal_vectors.json`
+uses fixed, synthetic keys and identifiers for protocol tests; those keys must never be used with real documents.
+
+## License
+
+Mokutori plugin code is released under the [MIT License](LICENSE). The bundled Yobiru engine retains its
+[MIT license](scripts/engine/LICENSE), and Project Nayuki's QR generator retains its MIT notice in
+[`qrcodegen.py`](scripts/third_party/qrcodegen.py). Agent names and trademarks belong to their respective owners;
+compatibility does not imply endorsement.

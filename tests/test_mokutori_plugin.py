@@ -2,7 +2,7 @@
 
 The gateway comes from a Yobiru source checkout ($YOBIRU_SOURCE, default ../yobiru next to this repository or
 /home/user/chekusu/yobiru); the test is skipped without one. The iPad side is the Python reference of the app
-protocol in Tests/AgentRelay/app_protocol_reference.py.
+protocol in tests/app_protocol_reference.py.
 """
 import json
 from contextlib import closing
