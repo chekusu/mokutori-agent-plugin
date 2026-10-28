@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import subprocess
 import sys
 import time
@@ -41,6 +42,26 @@ CTX = "yobiru-e2e/1"
 CAPABILITIES = "chat,files"
 MEDIA_EXT = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\Z")
+AGENTS = ("grok", "codex", "claude_code", "cursor", "muse", "other")
+# The app colours its own mark for these agents; others pair without a brand field.
+AGENT_BRANDS = {"grok": "grok-bot", "muse": "muse"}
+BOT_NAME_LIMIT = 80
+
+
+def bot_name(value):
+    """The gateway display name the owner sees in Mokutori. It must tell this bot apart from their others."""
+    if value is None:
+        raise MokutoriError("--name is required: the name the owner knows you by (for example your role "
+                            "for them), shown in Mokutori when pairing and in its connected agents list; "
+                            "ask the owner if you are unsure")
+    error = C.text_error(value, BOT_NAME_LIMIT)
+    if error:
+        raise MokutoriError("--name %s" % error)
+    name = C.clean_label(value, BOT_NAME_LIMIT)
+    if name.casefold() == "mokutori":
+        raise MokutoriError("--name must identify this agent, not the Mokutori app; use the name the owner "
+                            "knows you by")
+    return name
 
 
 def binding_host(agent):
@@ -166,7 +187,15 @@ def require_setup(state):
 def cmd_setup(home, a):
     state = home.state()
     if state.get("setup") and not a.force:
+        setup = state["setup"]
+        if a.agent and setup.get("agent") is None:
+            # Older installations did not record their agent; this changes nothing at the gateway.
+            setup["agent"] = a.agent
+            home.save(state)
+        elif a.agent and setup.get("agent") != a.agent:
+            raise MokutoriError("this bot was set up for agent %r; changing it needs a new setup" % setup["agent"])
         out({"ok": True, "already_set_up": True, **status_view(home, state)})
+    a.name, a.agent = bot_name(a.name), a.agent or "other"
     home.ensure()
     gateway = C.normalize_base_url(a.gateway or DEFAULT_GATEWAY)
     if a.owner_home:
@@ -187,8 +216,8 @@ def cmd_setup(home, a):
                         *(["--lang", a.lang] if a.lang else []))
         out({"ok": True, "step": "email_sent", "gateway": gateway,
              "next": "Ask the owner for the 6-digit code from that email, then run: mokutori setup --gateway %s "
-                     "--name %r%s --email-code CODE --agent %s"
-                     % (gateway, a.name, " --handle %s" % a.handle if a.handle else "", a.agent),
+                     "--name %s%s --email-code CODE --agent %s"
+                     % (gateway, shlex.quote(a.name), " --handle %s" % a.handle if a.handle else "", a.agent),
              "engine": {k: result.get(k) for k in ("note", "expires_at") if k in result}})
     args = ["enroll-bot", gateway, "--name", a.name]
     if a.handle:
@@ -215,6 +244,7 @@ def finish_setup(home, state, a, gateway, owner, bot_id):
                 leftover.unlink()
     card = C.api_call(gateway, "GET", "/@" + bot_id)[1]
     state["setup"] = {"gateway": gateway, "bot_id": bot_id, "handle": card.get("handle"),
+                      "name": card.get("display_name"), "agent": a.agent,
                       "bot_key": (card.get("e2e") or {}).get("key"), "set_up_at": iso(now())}
     if owner != home.default_owner:
         state["setup"]["owner_home"] = str(owner)
@@ -284,7 +314,7 @@ def status_view(home, state):
     setup = state.get("setup") or {}
     return {"home": str(home.path), "owner_home": str(home.owner),
             "gateway": setup.get("gateway"), "bot_id": setup.get("bot_id"),
-            "handle": setup.get("handle"),
+            "handle": setup.get("handle"), "name": setup.get("name"), "agent": setup.get("agent"),
             "bot_key_fingerprint": E.fingerprint(setup["bot_key"]) if setup.get("bot_key") else None,
             "devices": [dict(device, actor_id=actor) for actor, device in state.get("devices", {}).items()],
             "pending_pairings": sum(1 for p in state.get("pairings", {}).values() if pairing_state(p) == "pending"),
@@ -295,10 +325,28 @@ def cmd_status(home, a):
     out({"ok": True, "version": VERSION, **status_view(home, home.state())})
 
 
+def cmd_rename(home, a):
+    state = home.state()
+    setup = require_setup(state)
+    name = bot_name(a.name)
+    engine(home.owner, "bot", "edit", setup["bot_id"], "--name", name, "--gateway", setup["gateway"])
+    card = C.api_call(setup["gateway"], "GET", "/@" + setup["bot_id"])[1]
+    if card.get("display_name") != name:
+        raise MokutoriError("the gateway did not confirm the new name")
+    setup["name"] = name
+    home.save(state)
+    out({"ok": True, "bot_id": setup["bot_id"], "name": name,
+         "note": "Mokutori shows the new name the next time it reads this bot's card; existing pairings stay."})
+
+
 # ---------------------------------------------------------------- pairing
 def pairing_parameters(setup, pairing_id, secret):
-    return urllib.parse.urlencode([("v", "1"), ("g", setup["gateway"]), ("b", setup["bot_id"]),
-                                   ("k", setup["bot_key"]), ("i", pairing_id), ("s", secret)])
+    parameters = [("v", "1"), ("g", setup["gateway"]), ("b", setup["bot_id"]),
+                  ("k", setup["bot_key"]), ("i", pairing_id), ("s", secret)]
+    brand = AGENT_BRANDS.get(setup.get("agent"))
+    if brand:
+        parameters.append(("a", brand))
+    return urllib.parse.urlencode(parameters)
 
 
 def pairing_url(setup, pairing_id, secret):
@@ -741,17 +789,20 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("setup", help="create this agent's Mokutori bot (once)")
     p.add_argument("--gateway", help="Friends gateway (default %s)" % DEFAULT_GATEWAY)
-    p.add_argument("--name", default="Mokutori")
+    p.add_argument("--name", help="required: the name the owner knows you by, shown in Mokutori (at most %d "
+                                   "characters)" % BOT_NAME_LIMIT)
     p.add_argument("--handle")
     p.add_argument("--email", help="step one on gateways that verify email: mail the owner a code")
     p.add_argument("--email-code", help="step two: the 6-digit code from that email")
     p.add_argument("--lang", choices=("en", "zh", "ja"))
-    p.add_argument("--agent", default="other", choices=("grok", "codex", "claude_code", "cursor", "muse", "other"),
-                   help="which agent reads the pages here")
+    p.add_argument("--agent", choices=AGENTS, help="which agent reads the pages here (default other); "
+                                                   "grok and muse also show their mark in Mokutori")
     p.add_argument("--owner-home", help="reuse the owner in an existing Yobiru data home for a new setup; "
                                         "existing setups automatically retain setup.owner_home")
     p.add_argument("--force", action="store_true")
     sub.add_parser("status", help="setup, paired iPads and open pairings")
+    p = sub.add_parser("rename", help="change the name Mokutori shows for this agent's bot")
+    p.add_argument("--name", required=True)
     p = sub.add_parser("pair", help="make a one-time pairing QR code and clickable HTTPS link")
     p.add_argument("--png", help="where to write the QR image")
     p.add_argument("--minutes", type=int, default=PAIR_MINUTES, choices=range(1, 61), metavar="1-60")
@@ -769,7 +820,7 @@ def main(argv=None):
     p.add_argument("--no-pair-check", action="store_true")
     a = parser.parse_args(argv)
     home = Home(a.home or default_home())
-    handlers = {"setup": cmd_setup, "status": cmd_status, "pair": cmd_pair, "pair-check": cmd_pair_check,
+    handlers = {"setup": cmd_setup, "status": cmd_status, "rename": cmd_rename, "pair": cmd_pair, "pair-check": cmd_pair_check,
                 "devices": cmd_devices, "unpair": cmd_unpair, "inbox": cmd_inbox}
     try:
         home.ensure()
