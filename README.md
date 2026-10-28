@@ -91,7 +91,7 @@ on the phone they need to pair.
 | Output | Purpose |
 | --- | --- |
 | `qr_png` | The QR image; its payload remains the existing custom scheme for older scanning builds. |
-| `pair_link` | `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...` for a clickable phone link. |
+| `pair_link` | `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...[&a=...]` for a clickable phone link. |
 | `pair_url` | The existing `mokutori://pair?...` URL, retained for compatible clients and the QR payload. |
 
 The HTTPS URL puts all pairing parameters after `#`, with no query string. Browsers do not send this
@@ -104,15 +104,30 @@ New pairings use `mokutori://pair` and the `mokutori-pair/1` proof prefix. A QR 
 plugin (`mitori://pair`) is not compatible with this protocol; do not reuse it. Pairing codes are one-time secrets and
 expire, so show the new image only to the owner and remove the temporary image after scanning.
 
-For a **new** installation whose owner already uses Yobiru, `setup --owner-home /absolute/YOBIRU_HOME --agent grok`
-creates a new Mokutori receiver under that existing owner without another email registration.
-An existing installation needs only the plugin upgrade; do not rerun setup or use `setup --force` to repair it.
+For a **new** installation whose owner already uses Yobiru,
+`setup --owner-home /absolute/YOBIRU_HOME --name "YOUR NAME" --agent grok` creates a new Mokutori receiver under
+that existing owner without another email registration.
+An existing installation needs only the plugin upgrade; do not rerun a full setup or use `setup --force` to repair it.
+
+## Bot name and agent mark
+
+`setup` requires `--name`: the bot's display name on the gateway, which Mokutori shows when the owner
+confirms pairing and in its connected agents list (at most 80 characters). Use the name the owner knows the
+agent by, such as its role, because one owner may pair several bots; "Mokutori" is refused. Earlier
+versions silently named every bot "Mokutori", so an existing bot showing that name should run
+`rename --name "NEW NAME"`, which updates the gateway card and keeps pairings and pages.
+
+Pairing links for `--agent grok` and `--agent muse` end with `&a=grok-bot` or `&a=muse`, so Mokutori can show
+that agent's mark in colour once paired; other agents omit `a`. Setups from before this change did not record
+the agent: run `setup --agent grok` (or `muse`) once on the existing installation to record it locally. This
+does not change the gateway or create another bot.
 
 ## Commands
 
 ```sh
-sh scripts/mokutori setup --email you@example.com --agent codex      # step one: a code is emailed
-sh scripts/mokutori setup --email-code 123456 --agent codex          # step two
+sh scripts/mokutori setup --email you@example.com --name "Research assistant" --agent codex   # step one: a code is emailed
+sh scripts/mokutori setup --email-code 123456 --name "Research assistant" --agent codex       # step two
+sh scripts/mokutori rename --name "账本管家"                        # change the name Mokutori shows
 sh scripts/mokutori pair --terminal                                  # one-time QR code
 sh scripts/mokutori pair-check --wait 120                            # accept the iPad
 sh scripts/mokutori inbox                                            # save and show new pages

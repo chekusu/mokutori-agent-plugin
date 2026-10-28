@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Add the optional agent brand `a` to both pairing links: `grok-bot` for `--agent grok` and `muse` for
+  `--agent muse`; other agents omit it. Setup now records its agent, and `setup --agent` on an existing
+  installation records a missing value locally without touching the gateway.
+- Require `setup --name`, the bot display name Mokutori shows for this agent (at most 80 characters).
+  A missing name, or "Mokutori", is refused instead of silently naming every bot "Mokutori". The skill tells
+  agents to use the name their owner knows them by, and to ask when unsure.
+- Add `rename --name NEW` to update the bot's gateway display name in place; `status` reports `name` and
+  `agent`. Bots still named "Mokutori" should be renamed.
+
 - Add an optional Muse bridge audit log (`MOKUTORI_MUSE_AUDIT_PATH`). It is off by default and records
   only allowlisted MCP methods, tool names, batch IDs, success flags and returned image hashes; never
   keys, headers, sessions, document text or response bodies.

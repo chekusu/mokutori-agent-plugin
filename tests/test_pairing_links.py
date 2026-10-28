@@ -56,6 +56,47 @@ class PairingLinks(unittest.TestCase):
             self.assertIn("paired list is nonempty", result["next"])
             self.assertNotIn("paired", result)
 
+    def test_brand_field_follows_the_saved_agent_in_both_links(self):
+        for agent, brand in (("grok", "grok-bot"), ("muse", "muse")):
+            setup = dict(self.setup, agent=agent)
+            for link in (plugin.pairing_url(setup, self.pairing_id, self.secret),
+                         plugin.pairing_link(setup, self.pairing_id, self.secret)):
+                with self.subTest(agent=agent, link=link[:8]):
+                    parsed = urllib.parse.urlsplit(link)
+                    pairs = urllib.parse.parse_qsl(parsed.query or parsed.fragment)
+                    self.assertEqual(pairs[-1], ("a", brand))
+                    self.assertEqual([key for key, _ in pairs], list("vgbkisa"))
+                    self.assertEqual(app.parse_pairing(link)["agent"], brand)
+        for agent in ("codex", "claude_code", "cursor", "other", None):
+            setup = dict(self.setup, agent=agent)
+            for link in (plugin.pairing_url(setup, self.pairing_id, self.secret),
+                         plugin.pairing_link(setup, self.pairing_id, self.secret)):
+                with self.subTest(agent=agent, link=link[:8]):
+                    parsed = urllib.parse.urlsplit(link)
+                    self.assertEqual([key for key, _ in urllib.parse.parse_qsl(parsed.query or parsed.fragment)],
+                                     list("vgbkis"))
+                    self.assertIsNone(app.parse_pairing(link)["agent"])
+
+    def test_reference_accepts_optional_brand_like_the_app(self):
+        base = plugin.pairing_link(self.setup, self.pairing_id, self.secret)
+        self.assertIsNone(app.parse_pairing(base + "&a=future-agent")["agent"])
+        for value in (base + "&a=", base + "&a=muse&a=grok-bot", base + "&a=Grok", base + "&a=" + "x" * 33,
+                      base + "&a=grok_bot", base + "&b=bot_other"):
+            with self.subTest(value=value[-24:]), self.assertRaises(ValueError):
+                app.parse_pairing(value)
+
+    def test_cli_pair_carries_grok_brand(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = plugin.Home(temporary)
+            home.save({"v": 1, "setup": dict(self.setup, agent="grok"), "pairings": {}, "devices": {}})
+            args = SimpleNamespace(minutes=15, label=None, png=None, terminal=False, wait=0)
+            stream = io.StringIO()
+            with redirect_stdout(stream), self.assertRaises(SystemExit):
+                plugin.cmd_pair(home, args)
+            result = json.loads(stream.getvalue())
+            self.assertEqual(app.parse_pairing(result["pair_url"])["agent"], "grok-bot")
+            self.assertEqual(app.parse_pairing(result["pair_link"]), app.parse_pairing(result["pair_url"]))
+
     def test_reference_rejects_offsite_or_query_based_https_links(self):
         link = plugin.pairing_link(self.setup, self.pairing_id, self.secret)
         invalid = [link.replace("https:", "http:"), link.replace("mokutori.com", "other.example"),

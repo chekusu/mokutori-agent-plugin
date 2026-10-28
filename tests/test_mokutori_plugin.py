@@ -70,7 +70,7 @@ class PluginFlow(unittest.TestCase):
     def setup_agent(self, agent="other"):
         return self.mokutori("setup", "--gateway", self.url,
                             "--handle", "mokutori-" + hashlib.sha256(self._testMethodName.encode()).hexdigest()[:8],
-                            "--name", "Mokutori", "--agent", agent)
+                            "--name", "书房助手", "--agent", agent)
 
     @classmethod
     def tearDownClass(cls):
@@ -243,15 +243,31 @@ class PluginFlow(unittest.TestCase):
         original = self.setup_agent()
         owner = self.home / "owner"
         self.home = self.root / (self._testMethodName + "-second")
-        setup = self.mokutori("setup", "--gateway", self.url, "--owner-home", str(owner), "--agent", "grok")
+        setup = self.mokutori("setup", "--gateway", self.url, "--owner-home", str(owner), "--agent", "grok",
+                              "--name", "Grok 秘书")
         self.assertNotEqual(setup["bot_id"], original["bot_id"])
+        self.assertEqual((setup["name"], setup["agent"]), ("Grok 秘书", "grok"))
         self.assertEqual(setup["owner_home"], str(owner))
         self.assertFalse((self.home / "owner" / "public" / "credentials.json").exists())
         self.assertTrue(self.mokutori("setup", "--owner-home", str(owner))["already_set_up"])
         code = self.mokutori("pair")
+        self.assertEqual(app.parse_pairing(code["pair_link"])["agent"], "grok-bot")
         ipad = app.App()
         ipad.pair(code["pair_url"])
         self.assertEqual(len(self.mokutori("pair-check")["paired"]), 1)
+
+    def test_setup_requires_a_name_and_rename_updates_the_gateway_card(self):
+        refused = self.mokutori("setup", "--gateway", self.url, "--agent", "grok", expect_ok=False)
+        self.assertIn("--name is required", refused["error"])
+        setup = self.setup_agent()
+        self.assertEqual((setup["name"], setup["agent"]), ("书房助手", "other"))
+        self.assertEqual(app.call(self.url, "GET", "/@" + setup["bot_id"])[1]["display_name"], "书房助手")
+        self.assertIn("--name must identify", self.mokutori("rename", "--name", "Mokutori", expect_ok=False)["error"])
+        renamed = self.mokutori("rename", "--name", "  账本   管家 ")
+        self.assertEqual((renamed["bot_id"], renamed["name"]), (setup["bot_id"], "账本 管家"))
+        self.assertEqual(app.call(self.url, "GET", "/@" + setup["bot_id"])[1]["display_name"], "账本 管家")
+        self.assertEqual(self.mokutori("status")["name"], "账本 管家")
+        self.assertIsNone(app.parse_pairing(self.mokutori("pair")["pair_link"])["agent"])
 
     def test_muse_receives_image_and_acknowledges_without_deleting(self):
         sys.path.insert(0, str(PLUGIN))

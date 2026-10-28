@@ -25,17 +25,39 @@ credential symlinks, run `setup --force`, or create another bot to repair an upg
 reports an old record, preserve it and its backups; never mark it accepted manually. An old record without
 modern proof metadata is not replayed. Generate a fresh QR if the device still needs pairing.
 
+After upgrading an existing setup, check `status`. If its `name` is empty or "Mokutori", rename the bot
+(see **Rename**) so the owner can tell it apart. If its `agent` is empty, run `sh M setup --agent AGENT`
+once with the agent you are (it records the value locally and changes nothing at the gateway).
+
 ## First time: set up
 
-`sh M status` shows whether setup is done. If not, set it up with the owner's permission:
+`sh M status` shows whether setup is done. If not, set it up with the owner's permission.
 
-1. `sh M setup --email OWNER_EMAIL --agent grok|codex|claude_code|other` mails a 6-digit code to the
-   owner (the official gateway verifies one email per owner). Ask the owner for their email; never guess it.
-2. `sh M setup --email-code CODE --agent ...` with the code the owner gives you. Optional `--handle NAME`.
+Choose your name first. `--name` is required: it is this bot's name on the gateway, which Mokutori shows
+when the owner confirms pairing and in its list of connected agents. The owner may have several agents
+(for example several Grok Bots with different roles), so use the name they know you by, such as your role
+for them ("账本管家", "Research assistant"), at most 80 characters. Not "Mokutori", which names the app.
+If you do not know what they call you, ask them before setup.
+
+1. `sh M setup --email OWNER_EMAIL --name "YOUR NAME" --agent grok|muse|codex|claude_code|cursor|other`
+   mails a 6-digit code to the owner (the official gateway verifies one email per owner). Ask the owner for
+   their email; never guess it.
+2. `sh M setup --email-code CODE --name "YOUR NAME" --agent ...` with the code the owner gives you
+   (the first step's `next` repeats the command). Optional `--handle NAME`.
+
+Pass the `--agent` you really are: Grok Bot is `grok` and Muse is `muse`; Mokutori then shows that
+agent's mark in colour once paired. Other agents pair the same way without a mark.
 
 If the owner already has a Yobiru owner credential, an authorized **new** setup can instead use
-`sh M setup --owner-home /absolute/YOBIRU_HOME --agent ...`. This keeps the owner credential in its
-original directory. Existing setups automatically use their saved location and do not need this command.
+`sh M setup --owner-home /absolute/YOBIRU_HOME --name "YOUR NAME" --agent ...`. This keeps the owner
+credential in its original directory. Existing setups automatically use their saved location and do not
+need this command.
+
+## Rename
+
+`sh M rename --name "NEW NAME"` changes the bot's name on the gateway; pairings and pages stay. Rename
+when the owner asks, or when `status` shows the old default name "Mokutori". Mokutori shows the new name
+the next time it reads the bot. Do not run `setup --force` to change a name.
 
 ## Pair an iPad or iPhone
 
@@ -51,7 +73,8 @@ original directory. Existing setups automatically use their saved location and d
    `ok: true`, a generated code, a link opening the app, or a queued proof does not establish success.
    An empty result means still waiting; if the code expired, generate and show a fresh image and link.
 
-`pair_link` uses `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...`. Keep the parameters
+`pair_link` uses `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...`, followed by `&a=grok-bot`
+or `&a=muse` for those agents. Keep the parameters
 in the fragment exactly as returned; never put them in an HTTP query/path or a URL shortener. Do not
 replace the actual `&` separators with literal `&amp;` in a chat link. The existing `pair_url` and QR payload
 remain `mokutori://pair?...` for compatibility. Both entries share one secret, expiry and single-use pairing.

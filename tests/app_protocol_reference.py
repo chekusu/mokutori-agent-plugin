@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
 import urllib.error
@@ -22,6 +23,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "engine"))
 import bot_e2e as E  # noqa: E402
 
 PAIR_PREFIX = "mokutori-pair/1"
+AGENT_BRANDS = ("muse", "grok-bot")
 CTX = "yobiru-e2e/1"
 MAX_FILES = 8
 MAX_FILE_BYTES = 4 * 1024 * 1024
@@ -63,14 +65,19 @@ def parse_pairing(url):
         parameters = parsed.fragment
     else:
         raise ValueError("not a Mokutori pairing code")
-    pairs = urllib.parse.parse_qsl(parameters, strict_parsing=True)
+    pairs = urllib.parse.parse_qsl(parameters, keep_blank_values=True, strict_parsing=True)
     query = dict(pairs)
     if len(query) != len(pairs):
         raise ValueError("duplicate pairing parameter")
-    if set(query) != set("vgbkis") or query.get("v") != "1" or not all(query.get(k) for k in "gbkis"):
+    if (not set("vgbkis") <= set(query) <= set("vgbkisa") or query.get("v") != "1"
+            or not all(query.get(k) for k in "gbkis")):
         raise ValueError("incomplete pairing code")
+    # The optional agent brand: malformed values are refused, well-formed unknown ones ignored.
+    if "a" in query and re.fullmatch(r"[a-z0-9-]{1,32}", query["a"]) is None:
+        raise ValueError("invalid agent brand")
     return {"gateway": query["g"].rstrip("/"), "bot_id": query["b"], "bot_key": query["k"],
-            "pairing_id": query["i"], "secret": query["s"]}
+            "pairing_id": query["i"], "secret": query["s"],
+            "agent": query["a"] if query.get("a") in AGENT_BRANDS else None}
 
 
 def proof(secret, pairing_id, bot_id, actor_id):
