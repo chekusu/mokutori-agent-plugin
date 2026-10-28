@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -10,7 +12,8 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
-from muse_connector import ConnectorError, HTTPServer, MCPServer, Service, MAX_IMAGE_BYTES
+from muse_connector import AuditLog, ConnectorError, HTTPServer, MCPServer, Service, MAX_ACK_IDS, MAX_IMAGE_BYTES
+from muse_connector import main as connector_main
 import mokutori as cli
 
 
@@ -205,6 +208,119 @@ class ServiceSafetyTests(unittest.TestCase):
             (folder / "large.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * MAX_IMAGE_BYTES)
             with self.assertRaisesRegex(ConnectorError, "too large"):
                 service.get_scan_image("notice_img", "large.png")
+
+
+class AuditTests(unittest.TestCase):
+    def test_environment_enables_audit_for_http_server(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "audit.jsonl"
+            with mock.patch.dict(os.environ, {"MOKUTORI_MUSE_API_KEY": "a" * 32,
+                                              "MOKUTORI_MUSE_AUDIT_PATH": str(path)}), mock.patch(
+                    "muse_connector.HTTPServer") as http:
+                http.return_value.serve_forever.side_effect = KeyboardInterrupt
+                self.assertEqual(connector_main(["--home", temp]), 0)
+                mcp = http.call_args.args[1]
+                mcp.dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+            self.assertEqual(json.loads(path.read_text())["method"], "ping")
+
+    def ready_server(self, path, service=None):
+        server = MCPServer(service or FakeService(), "installation-secret-must-not-appear", audit=AuditLog(path))
+        session = server.create_session()
+        server.dispatch({"jsonrpc": "2.0", "id": "private-request-id", "method": "initialize", "params": {
+            "clientInfo": {"name": "private-client-name"}, "protocolVersion": "2025-11-25"}}, session)
+        server.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"}, session)
+        return server, session
+
+    def call(self, server, session, name, arguments):
+        return server.dispatch({"jsonrpc": "2.0", "id": "private-request-id", "method": "tools/call",
+                                "params": {"name": name, "arguments": arguments}}, session)
+
+    def test_records_outcomes_and_image_hash_without_private_payloads(self):
+        class ContentService(FakeService):
+            def list_scans(self, limit):
+                return {"batches": [{"notice_id": "msg_listed", "ocr_markdown": "PRIVATE OCR BODY",
+                                     "summary": "PRIVATE SUMMARY", "files": [{"name": "PRIVATE FILE NAME"}]}]}
+
+            def status(self):
+                return {"gateway": "https://private.gateway", "devices": [{"name": "PRIVATE IPAD NAME"}]}
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "audit.jsonl"
+            server, session = self.ready_server(path, ContentService())
+            self.call(server, session, "mokutori_status", {})
+            self.call(server, session, "mokutori_list_scans", {"limit": 1})
+            self.call(server, session, "mokutori_get_scan_image", {"notice_id": "msg_listed", "name": "page.png"})
+            self.call(server, session, "mokutori_acknowledge_scans", {"notice_ids": ["msg_listed"]})
+            raw = path.read_text()
+            events = [json.loads(line) for line in raw.splitlines()]
+            self.assertEqual(len(events), 6)
+            self.assertTrue(all(item["success"] for item in events))
+            self.assertEqual(events[3]["batch_ids"], ["msg_listed"])
+            self.assertEqual(events[4]["image_sha256"], hashlib.sha256(b"abc").hexdigest())
+            self.assertEqual(events[5]["acknowledged_batch_ids"], ["msg_listed"])
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            for private in ("PRIVATE", "private", session, server.api_key, "YWJj", "page.png", "structuredContent"):
+                self.assertNotIn(private, raw)
+            self.assertEqual(set(events[4]), {"time", "method", "success", "tool", "batch_ids", "image_sha256"})
+
+    def test_unknown_input_and_service_errors_remain_sanitized(self):
+        class BrokenService(FakeService):
+            def list_scans(self, limit):
+                raise RuntimeError("PRIVATE exception and credentials")
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "audit.jsonl"
+            server, session = self.ready_server(path, BrokenService())
+            self.call(server, session, "PRIVATE unknown tool", {"notice_id": "PRIVATE", "secret": "PRIVATE"})
+            self.call(server, session, "mokutori_status", {"secret": "PRIVATE"})
+            self.call(server, session, "mokutori_list_scans", {})
+            server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "PRIVATE method"}, session)
+            raw = path.read_text()
+            events = [json.loads(line) for line in raw.splitlines()]
+            self.assertEqual(events[2]["tool"], "unknown")
+            self.assertEqual(events[-1]["method"], "unknown")
+            self.assertTrue(all(not item["success"] for item in events[2:]))
+            self.assertNotIn("PRIVATE", raw)
+            self.assertNotIn("exception", raw)
+
+    def test_batch_ids_are_bounded_and_ack_refusal_is_a_failure(self):
+        class RefusingService(FakeService):
+            def acknowledge(self, notice_ids):
+                return {"acknowledged": ["msg_saved"], "refused": [{"notice_id": "msg_missing", "error": "not_read"}]}
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "audit.jsonl"
+            audit = AuditLog(path)
+            # Malformed or unbounded values cannot enter the allowlisted ID fields.
+            audit.record({"method": "tools/call", "params": {"name": "mokutori_acknowledge_scans", "arguments": {
+                "notice_ids": ["../PRIVATE", "invalid\nPRIVATE"] + ["msg_%d" % n for n in range(MAX_ACK_IDS * 2)]}}},
+                {"result": {"isError": False, "structuredContent": {"acknowledged": []}}})
+            event = json.loads(path.read_text())
+            self.assertLessEqual(len(event["batch_ids"]), MAX_ACK_IDS)
+            self.assertNotIn("PRIVATE", path.read_text())
+            server, session = self.ready_server(path, RefusingService())
+            self.call(server, session, "mokutori_acknowledge_scans", {"notice_ids": ["msg_saved", "msg_missing"]})
+            event = json.loads(path.read_text().splitlines()[-1])
+            self.assertFalse(event["success"])
+            self.assertEqual(event["acknowledged_batch_ids"], ["msg_saved"])
+
+    def test_symlink_destination_is_rejected_and_late_write_failure_preserves_outcome(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            target = root / "target"
+            target.write_text("keep")
+            link = root / "link"
+            link.symlink_to(target)
+            with self.assertRaises(OSError):
+                AuditLog(link)
+            self.assertEqual(target.read_text(), "keep")
+            path = root / "audit.jsonl"
+            server, session = self.ready_server(path)
+            with mock.patch("muse_connector.os.write", side_effect=OSError("PRIVATE write failure")), mock.patch(
+                    "muse_connector.sys.stderr") as stderr:
+                result = self.call(server, session, "mokutori_acknowledge_scans", {"notice_ids": ["msg_saved"]})
+            self.assertEqual(result["result"]["structuredContent"]["acknowledged"], ["msg_saved"])
+            self.assertNotIn("PRIVATE", "".join(call.args[0] for call in stderr.write.call_args_list))
 
 
 if __name__ == "__main__":

@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timezone
+import hashlib
 import hmac
 import http.server
 import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import threading
@@ -43,6 +46,7 @@ MAX_ACK_IDS = 50
 API_KEY_ENV = "MOKUTORI_MUSE_API_KEY"
 ALLOWED_ORIGINS_ENV = "MOKUTORI_MUSE_ALLOWED_ORIGINS"
 FIXTURE_ENV = "MOKUTORI_MUSE_FIXTURE_ONLY"
+AUDIT_PATH_ENV = "MOKUTORI_MUSE_AUDIT_PATH"
 NOTICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$\Z")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\Z")
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
@@ -120,6 +124,108 @@ TOOLS = [
     },
 ]
 TOOL_INDEX = {tool["name"]: tool for tool in TOOLS}
+
+
+class AuditLog:
+    """Optional local JSONL evidence, constructed from an explicit field allowlist.
+
+    Never serialize a request, headers, session, exception, or tool response.
+    A recording failure must not turn an already completed write into a failed
+    tool call that a client might replay.
+    """
+
+    METHODS = frozenset(("initialize", "notifications/initialized", "ping", "tools/list", "tools/call"))
+
+    def __init__(self, path: Path):
+        self.path = Path(path).expanduser()
+        self._lock = threading.Lock()
+        # Validate the destination before accepting requests. Its parent must
+        # already exist; never create directories based on request data.
+        fd = self._open()
+        os.close(fd)
+
+    def _open(self) -> int:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(self.path), flags, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise OSError("audit destination must be an owned regular file")
+            os.fchmod(fd, 0o600)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    @staticmethod
+    def _ids(values: Any) -> list:
+        if not isinstance(values, list):
+            return []
+        # Slice before filtering so malformed input cannot cause unbounded
+        # processing. IDs are the only tool arguments allowed in this log.
+        return list(dict.fromkeys(value for value in values[:MAX_ACK_IDS]
+                                  if isinstance(value, str) and NOTICE_ID_RE.fullmatch(value)))
+
+    def record(self, message: Any, response: Any) -> None:
+        request = message if isinstance(message, dict) else {}
+        method = request.get("method")
+        method = method if isinstance(method, str) and method in self.METHODS else "unknown"
+        event = {"time": datetime.now(timezone.utc).isoformat(), "method": method,
+                 "success": response is None or (isinstance(response, dict) and "error" not in response)}
+        params = request.get("params")
+        params = params if isinstance(params, dict) else {}
+        tool = params.get("name")
+        result = response.get("result") if isinstance(response, dict) else None
+        result = result if isinstance(result, dict) else {}
+        if method == "tools/call":
+            tool = tool if isinstance(tool, str) and tool in TOOL_INDEX else "unknown"
+            event["tool"] = tool
+            event["success"] = bool(event["success"] and result and not result.get("isError"))
+            value = result.get("structuredContent")
+            value = value if isinstance(value, dict) else {}
+            arguments = params.get("arguments")
+            arguments = arguments if isinstance(arguments, dict) else {}
+            if tool == "mokutori_list_scans":
+                batches = value.get("batches")
+                batches = batches[:MAX_BATCHES] if isinstance(batches, list) else []
+                event["batch_ids"] = self._ids([batch.get("notice_id") for batch in batches if isinstance(batch, dict)])
+                if value.get("ingestion_error_count") or any(batch.get("error") for batch in batches if isinstance(batch, dict)):
+                    event["success"] = False
+            elif tool == "mokutori_acknowledge_scans":
+                event["batch_ids"] = self._ids(arguments.get("notice_ids"))
+                event["acknowledged_batch_ids"] = self._ids(value.get("acknowledged"))
+                if value.get("refused"):
+                    event["success"] = False
+            elif tool == "mokutori_get_scan_image":
+                event["batch_ids"] = self._ids([arguments.get("notice_id")])
+                blocks = result.get("content")
+                for block in blocks[:2] if isinstance(blocks, list) else []:
+                    if not isinstance(block, dict) or block.get("type") != "image":
+                        continue
+                    encoded = block.get("data")
+                    if not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
+                        continue
+                    try:
+                        data = base64.b64decode(encoded, validate=True)
+                    except (ValueError, TypeError):
+                        continue
+                    if len(data) <= MAX_IMAGE_BYTES:
+                        event["image_sha256"] = hashlib.sha256(data).hexdigest()
+                    break
+        payload = (json.dumps(event, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+        try:
+            with self._lock:
+                fd = self._open()
+                try:
+                    while payload:
+                        written = os.write(fd, payload)
+                        if written <= 0:
+                            raise OSError("audit write failed")
+                        payload = payload[written:]
+                finally:
+                    os.close(fd)
+        except OSError:
+            print("Mokutori audit recording failed; tool outcome is unchanged.", file=sys.stderr)
 
 
 def _schema_error(schema: Dict[str, Any], value: Any, path: str = "arguments") -> Optional[str]:
@@ -328,10 +434,11 @@ class Service:
 
 
 class MCPServer:
-    def __init__(self, service: Service, api_key: str):
+    def __init__(self, service: Service, api_key: str, audit: Optional[AuditLog] = None):
         if not api_key or len(api_key) < 20:
             raise ValueError("MOKUTORI_MUSE_API_KEY must be a random key of at least 20 characters")
         self.service, self.api_key = service, api_key
+        self.audit = audit
         self._phase_lock = threading.Lock()
         self._default_state = {"phase": "new", "protocol_version": None}
         self._sessions = {}
@@ -370,6 +477,12 @@ class MCPServer:
         return isinstance(supplied, str) and hmac.compare_digest(supplied, self.api_key)
 
     def dispatch(self, message: Dict[str, Any], session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        response = self._dispatch(message, session_id)
+        if self.audit is not None:
+            self.audit.record(message, response)
+        return response
+
+    def _dispatch(self, message: Dict[str, Any], session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         state = self._state(session_id)
         if state is None:
             return _error(message.get("id") if isinstance(message, dict) else None, -32600, "unknown session")
@@ -547,9 +660,11 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--api-key", default=os.environ.get(API_KEY_ENV), help="connector API key (prefer env var)")
     args = parser.parse_args(argv)
     try:
-        mcp = MCPServer(Service(Path(args.home).expanduser() if args.home else core.default_home()), args.api_key or "")
-    except ValueError as error:
-        parser.error(str(error))
+        audit_path = os.environ.get(AUDIT_PATH_ENV)
+        audit = AuditLog(Path(audit_path)) if audit_path else None
+        mcp = MCPServer(Service(Path(args.home).expanduser() if args.home else core.default_home()), args.api_key or "", audit=audit)
+    except (OSError, ValueError):
+        parser.error("invalid connector API key or audit destination")
     server = HTTPServer((args.host, args.port), mcp)
     try:
         server.serve_forever()
