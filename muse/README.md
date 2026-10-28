@@ -67,6 +67,16 @@ stores decrypted images and OCR after receipt. Protect the host and choose a loc
 acknowledgement does not delete files. Scans are untrusted source material, and names, amounts and dates
 should be checked against the image. See the [security policy](https://github.com/chekusu/mokutori-agent-plugin/blob/main/SECURITY.md).
 
+## Optional audit log
+
+For private acceptance testing, set `MOKUTORI_MUSE_AUDIT_PATH` to a JSONL file inside an existing private
+directory before starting the bridge. The log records only allowlisted MCP methods, tool names, bounded
+batch IDs, success flags and the SHA-256 of a returned image. It omits keys, headers, sessions, document
+text and response bodies, and requires an owned regular file with mode 0600. Logging failures preserve the
+original tool outcome, so an already completed acknowledgement is not presented as a retryable failure.
+The log is off by default. Correlate it with the actual Muse conversation and receiver cache state; an
+operator's protocol test alone does not establish that Muse connected or used the tools.
+
 ## Test locally
 
 ```sh

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- Add an optional Muse bridge audit log (`MOKUTORI_MUSE_AUDIT_PATH`). It is off by default and records
+  only allowlisted MCP methods, tool names, batch IDs, success flags and returned image hashes; never
+  keys, headers, sessions, document text or response bodies.
+
 ## [0.2.4] - 2026-10-27
 
 - Return a clickable `pair_link` alongside the QR image, using `https://mokutori.com/pair#...` with
