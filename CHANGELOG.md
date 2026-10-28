@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-28
+
 - Add the optional agent brand `a` to both pairing links: `grok-bot` for `--agent grok` and `muse` for
   `--agent muse`; other agents omit it. Setup now records its agent, and `setup --agent` on an existing
   installation records a missing value locally without touching the gateway.

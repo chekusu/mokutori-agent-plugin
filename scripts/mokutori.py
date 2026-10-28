@@ -33,7 +33,7 @@ import bot_client as B  # noqa: E402
 import bot_common as C  # noqa: E402
 import bot_e2e as E  # noqa: E402
 
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 DEFAULT_GATEWAY = "https://bots.yobiru.com"
 PAIR_PREFIX = "mokutori-pair/1"
 PAIR_SCHEME = "mokutori"
