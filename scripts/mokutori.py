@@ -224,12 +224,15 @@ def cmd_setup(home, a):
         args += ["--handle", a.handle]
     if a.email_code:
         args += ["--email-code", a.email_code]
+    # An address that already owns bots at the gateway: the engine adds this bot to that owner with the same code
+    # (Yobiru 0.7.20 join) and keeps only a manager credential for this one bot, never the owner credential.
     enrolled = engine(home.owner, *args)
     bot_id = enrolled.get("bot_id") or (enrolled.get("bot") or {}).get("bot_id")
-    finish_setup(home, state, a, gateway, home.owner, bot_id)
+    finish_setup(home, state, a, gateway, home.owner, bot_id,
+                 "manager" if enrolled.get("joined_existing_owner") else "owner")
 
 
-def finish_setup(home, state, a, gateway, owner, bot_id):
+def finish_setup(home, state, a, gateway, owner, bot_id, credential="owner"):
     if not bot_id:
         raise MokutoriError("the gateway did not return a bot id")
     engine(owner, "bot", "publish", bot_id, "--gateway", gateway, check=False)
@@ -248,6 +251,8 @@ def finish_setup(home, state, a, gateway, owner, bot_id):
                       "bot_key": (card.get("e2e") or {}).get("key"), "set_up_at": iso(now())}
     if owner != home.default_owner:
         state["setup"]["owner_home"] = str(owner)
+    if credential == "manager":
+        state["setup"]["credential"] = "manager"
     home.save(state)
     out({"ok": True, **status_view(home, state),
          "next": "Run `mokutori pair`, then give the owner both its QR image and clickable pair_link."})
@@ -336,6 +341,8 @@ def pairing_warnings(state):
 def status_view(home, state):
     setup = state.get("setup") or {}
     return {"home": str(home.path), "owner_home": str(home.owner),
+            # manager: a bot added to the owner's existing account; this home administers this one bot only.
+            "credential": setup.get("credential", "owner") if setup else None,
             "gateway": setup.get("gateway"), "bot_id": setup.get("bot_id"),
             "handle": setup.get("handle"), "name": setup.get("name"), "agent": setup.get("agent"),
             "bot_key_fingerprint": E.fingerprint(setup["bot_key"]) if setup.get("bot_key") else None,
@@ -604,13 +611,20 @@ WAKE_FIELDS = ("configured", "enabled", "host", "header", "scheme", "note", "wak
                "failing_since", "next_wake_after", "disabled_at")
 
 
-def owner_api(home, setup, method, path, body=None):
-    """Call the gateway's owner API with this bot's owner credential (never printed)."""
+def admin_token(home, setup):
+    """This bot's administration credential (never printed): the owner credential, or for a bot added to an
+    existing owner the manager credential of this one bot. The engine keeps either in the same place."""
     gateways = home.credentials("owner").get("gateways") or {}
     entry = gateways.get(setup["gateway"]) or gateways.get(setup["gateway"].rstrip("/")) or {}
     token = (entry.get("owner") or {}).get("token")
     if not token:
-        raise MokutoriError("no owner credential for %s in the owner data home" % setup["gateway"])
+        raise MokutoriError("no owner or bot manager credential for %s in the owner data home" % setup["gateway"])
+    return token
+
+
+def owner_api(home, setup, method, path, body=None):
+    """Call the gateway's owner API for this bot with its administration credential (never printed)."""
+    token = admin_token(home, setup)
     try:
         return C.api_ok(setup["gateway"], method, path, body, token)[1]
     except C.ApiError as error:
@@ -814,8 +828,7 @@ def receive_job(home, state, setup, summary, pairing_id=None, cached_finished=Fa
 
 def owner_job_context(home, setup, job_id):
     validated_job_id(job_id)
-    token = home.credentials("owner")["gateways"][setup["gateway"]]["owner"]["token"]
-    return C.api_ok(setup["gateway"], "GET", "/v1/owner/messages/%s" % job_id, None, token)[1]
+    return C.api_ok(setup["gateway"], "GET", "/v1/owner/messages/%s" % job_id, None, admin_token(home, setup))[1]
 
 
 def finish_received(home, state, setup, job_id, recover_resolved=True):

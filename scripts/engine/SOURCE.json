@@ -1,19 +1,19 @@
 {
   "about": "Unmodified copies of the Yobiru public-bot client (MIT). Mokutori uses it as its transport engine; refresh by copying public_bots/ from the source commit below.",
   "source": "https://github.com/chekusu/yobiru",
-  "commit": "ebc3e31e30d80081b863e322f4f566daa067f69b",
+  "commit": "262bc03892a853e0e4be8484ab99c1831c5c0bc1",
   "path": "plugins/yobiru/scripts/public_bots",
   "files": {
-    "bot_client.py": "4eb1355f81487f47891c73c5b570dedebefcb4cd72fe1622b5826d9ee44ddbd8",
-    "bot_common.py": "0bbc5104da890ccfbe7a7a5dd0bd58a855d7a1e22df0b12a0754649f8e489011",
+    "bot_client.py": "febe4faf54f68eb108c7e56534038823109bc7410389052eccbe3d05eba099d4",
+    "bot_common.py": "d8b125be7c8494a839830d6456d10087d3a05479a24820f4157733eb20773932",
     "bot_e2e.py": "25eb0a33c791796a965d02ca941390491e56d879dc33074735d59f561660210e",
     "bot_mcp.py": "22f08503404b5b57a41cdd3abbf1c6cf867802c8136e60a68c4853a0778c359b",
     "bot_agents.py": "6372ebf90da38740d95fd747f6916f59bfeca2b6a4faea6c749e80c3081a12d1",
     "bot_links.py": "2ce07106c7f6b4871d61ab8dee47b21c0476a80ca6a516731a3438f60fb014ea"
   },
-  "version": "0.7.17",
+  "version": "0.7.20",
   "test_gateway": {
     "path": "public_bots/bot_gateway.py",
-    "sha256": "540bc0da114ca54246c377dad809103b17d3a79559a30c926174316d41b5ec9f"
+    "sha256": "7568e6a7c08b437b189b025d96dde8a0c2f7bb97cfb9304512762703d65633c8"
   }
 }

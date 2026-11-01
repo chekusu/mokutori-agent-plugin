@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- A second agent of the same owner sets up with the owner's email. The official gateway lets one email register
+  one owner, so a Muse set up after a Grok Bot stopped at `email_in_use`, and the only way round it copied the
+  owner credential, which administers every bot, to the new machine. `setup --email-code` now adds the new bot to
+  that owner with the same code (Yobiru 0.7.20 `POST /v1/enroll/join`), and the new data home keeps only a
+  manager credential for its own bot. `pair-accept`, `pair-decline`, `rename`, `wake`, `unpair` and recovery use
+  it unchanged; it cannot reach the owner's other bots. `status` shows `credential: "manager"` for such a setup.
+  Existing setups, including those with `setup.owner_home`, behave as before.
+- The skill and README no longer suggest copying an owner directory to another machine (`--owner-home` is for an
+  owner directory on the same machine).
+- Update the bundled engine to Yobiru 0.7.20, which knows manager credentials and the join route. The full suite
+  runs against the pinned 0.7.20 gateway, plus a new join test with email verification on.
+
 ## [0.3.1] - 2026-11-01
 
 - Add `wake set --url-file F --secret-file F`, `wake status`, `wake test` and `wake clear` for Yobiru 0.7.17
