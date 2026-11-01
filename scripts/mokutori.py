@@ -595,6 +595,47 @@ def cmd_pair_decline(home, a):
          "note": "Declined: Mokutori tells the owner the Agent declined this device; it sends nothing."})
 
 
+# ---------------------------------------------------------------- hosted wake
+def owner_api(home, setup, method, path, body=None):
+    """Call the gateway's owner API with this bot's owner credential (never printed)."""
+    gateways = home.credentials("owner").get("gateways") or {}
+    entry = gateways.get(setup["gateway"]) or gateways.get(setup["gateway"].rstrip("/")) or {}
+    token = (entry.get("owner") or {}).get("token")
+    if not token:
+        raise MokutoriError("no owner credential for %s in the owner data home" % setup["gateway"])
+    try:
+        return C.api_ok(setup["gateway"], method, path, body, token)[1]
+    except C.ApiError as error:
+        if error.status in (404, 405) and method != "DELETE":
+            raise MokutoriError("this gateway does not offer hosted wakes yet; keep the scheduled check")
+        raise
+
+
+def cmd_wake(home, a):
+    """Let the gateway wake this agent: it calls the routine's webhook when a pairing request or pages arrive."""
+    state = home.state()
+    setup = require_setup(state)
+    path = "/v1/owner/bots/%s/wake" % setup["bot_id"]
+    if a.wake_cmd == "set":
+        try:
+            url = C.read_private_text(a.url_file, 4096, "webhook URL file").strip()
+            secret = C.read_private_text(a.secret_file, 4096, "webhook key file").strip()
+        except ValueError as error:
+            raise MokutoriError(str(error))
+        result = owner_api(home, setup, "PUT", path, {"url": url, "secret": secret,
+                                                      "wake_on_review": not a.no_review})
+        note = "The gateway now calls this webhook when a pairing request or pages arrive. It sends ids only."
+    elif a.wake_cmd == "clear":
+        result = owner_api(home, setup, "DELETE", path)
+        note = "Hosted wake removed; keep a scheduled check if nothing else wakes you."
+    else:
+        result = owner_api(home, setup, "GET", path)
+        note = None
+    view = {k: result.get(k) for k in ("configured", "host", "header", "scheme", "wake_on_review", "updated_at",
+                                       "last_wake_at", "last_outcome", "last_detail")}
+    out({"ok": True, "wake": view, "note": note})
+
+
 def cmd_devices(home, a):
     out({"ok": True, "devices": status_view(home, home.state())["devices"]})
 
@@ -900,6 +941,14 @@ def main(argv=None):
     p.add_argument("pairing_id")
     p = sub.add_parser("pair-decline", help="the owner declined: end this device's request")
     p.add_argument("pairing_id")
+    p = sub.add_parser("wake", help="let the gateway call this agent's routine webhook when something arrives")
+    ws = p.add_subparsers(dest="wake_cmd", required=True)
+    w = ws.add_parser("set", help="register the webhook (URL and key each in a private file)")
+    w.add_argument("--url-file", required=True)
+    w.add_argument("--secret-file", required=True)
+    w.add_argument("--no-review", action="store_true", help="wake only for paired devices, not pairing requests")
+    ws.add_parser("status")
+    ws.add_parser("clear")
     sub.add_parser("devices", help="paired iPads")
     p = sub.add_parser("unpair", help="block a paired iPad")
     p.add_argument("actor_id")
@@ -911,7 +960,7 @@ def main(argv=None):
     home = Home(a.home or default_home())
     handlers = {"setup": cmd_setup, "status": cmd_status, "rename": cmd_rename, "pair": cmd_pair, "pair-check": cmd_pair_check,
                 "pair-requests": cmd_pair_requests, "pair-accept": cmd_pair_accept, "pair-decline": cmd_pair_decline,
-                "devices": cmd_devices, "unpair": cmd_unpair, "inbox": cmd_inbox}
+                "devices": cmd_devices, "wake": cmd_wake, "unpair": cmd_unpair, "inbox": cmd_inbox}
     try:
         home.ensure()
         with C.FileLock(home.path / ".command.lock", blocking=False):

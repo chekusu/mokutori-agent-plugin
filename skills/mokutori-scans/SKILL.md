@@ -85,6 +85,22 @@ the next time it reads the bot. Do not run `setup --force` to change a name.
    the app, or a request waiting for the owner does not establish success. If the code expired with no
    request, generate and show a fresh image and link.
 
+## Wake up when something arrives
+
+A hosted agent such as Grok Bot does not run between conversations, so a pairing request or new pages wait
+until it does. Where the gateway offers hosted wakes, it can call a routine's webhook instead:
+
+1. With the owner's permission, add a webhook trigger to a routine whose instruction is: "Mokutori has
+   something for you: run `sh M pair-requests` and ask the owner about any request, then run `sh M inbox`."
+   The routine's Webhook section shows the URL and the key (sent as `Authorization: Bearer <key>`).
+2. Write the URL and the key each alone into a file only the owner can read (`umask 077`), using the host's
+   secure input; never put them in chat or on a command line.
+3. `sh M wake set --url-file URL_FILE --secret-file KEY_FILE`. `sh M wake status` shows the last wake;
+   `sh M wake clear` removes it. Add `--no-review` to wake only for paired devices, not pairing requests.
+
+The gateway sends ids only, never page content. If `wake set` says the gateway does not offer hosted wakes,
+keep the scheduled check from the pairing steps.
+
 `pair_link` uses `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...`, followed by `&a=grok-bot`
 or `&a=muse` for those agents. Keep the parameters
 in the fragment exactly as returned; never put them in an HTTP query/path or a URL shortener. Do not

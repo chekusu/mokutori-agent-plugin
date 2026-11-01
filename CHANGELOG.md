@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add `wake set --url-file F --secret-file F`, `wake status` and `wake clear`: register a routine's webhook
+  with the gateway's hosted wakes, so the gateway wakes a hosted agent such as Grok Bot when a pairing request
+  or pages arrive. The URL and key are read from private files and never printed. Gateways without hosted
+  wakes are reported plainly; the skill then keeps the scheduled check.
+
 ## [0.3.0] - 2026-11-01
 
 - Pairing now waits for the owner. A verified pairing request is recorded, not admitted:
