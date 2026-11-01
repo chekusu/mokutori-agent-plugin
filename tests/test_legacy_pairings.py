@@ -89,14 +89,16 @@ class LegacyPairingStateTests(unittest.TestCase):
                               "e2e": {"opened": True, "sealed_by": sender}}}
         with mock.patch.object(plugin, "engine", return_value={"inbound": [review]}), \
                 mock.patch.object(plugin, "finish_pairing", return_value={"actor_id": sender}) as finish:
-            paired = plugin.check_pairings(self.home)
-        self.assertEqual(paired, [{"actor_id": sender}])
-        self.assertEqual(finish.call_count, 1)
-        self.assertEqual(finish.call_args.args[2], "aabbccddeeff")
+            paired, requests = plugin.check_pairings(self.home)
+        # A verified proof waits for the owner; nothing is admitted yet.
+        self.assertEqual(paired, [])
+        finish.assert_not_called()
+        self.assertEqual([r["pairing_id"] for r in requests], ["aabbccddeeff"])
         saved = self.home.state()["pairings"]
         self.assertEqual(saved["0123456789ab"], old)
         self.assertEqual(saved["aabbccddeeff"]["used_by"], sender)
         self.assertEqual(saved["aabbccddeeff"]["proof_job_id"], job_id)
+        self.assertEqual(plugin.pairing_state(saved["aabbccddeeff"]), "requested")
 
     def test_expired_revoked_malformed_or_used_records_cannot_accept_a_proof(self):
         records = [self.pending(expires_at="2020-01-01T00:00:00Z"), self.pending(revoked=True),
@@ -114,9 +116,24 @@ class LegacyPairingStateTests(unittest.TestCase):
                 before = self.home.state_file.read_bytes()
                 with mock.patch.object(plugin, "engine", return_value={"inbound": [review]}), \
                         mock.patch.object(plugin, "finish_pairing") as finish:
-                    self.assertEqual(plugin.check_pairings(self.home), [])
+                    self.assertEqual(plugin.check_pairings(self.home), ([], []))
                 finish.assert_not_called()
                 self.assertEqual(self.home.state_file.read_bytes(), before)
+
+    def test_proof_counts_by_its_arrival_before_expiry(self):
+        sender = "actor_new"
+        proof = plugin.pairing_proof(self.secret, "aabbccddeeff", "bot_fixture", sender)
+        for arrived, counted in (("2020-01-01T00:10:00Z", True), ("2020-01-01T00:20:00Z", False), (None, False)):
+            with self.subTest(arrived=arrived):
+                self.state["pairings"] = {"aabbccddeeff": self.pending(expires_at="2020-01-01T00:15:00Z")}
+                self.home.save(self.state)
+                review = {"job_id": "msg_abcdefghijklmnop", "created_at": arrived,
+                          "from": {"principal_id": sender, "e2e_key": self.secret},
+                          "message": {"text": "%s aabbccddeeff %s" % (plugin.PAIR_PREFIX, proof),
+                                      "e2e": {"opened": True, "sealed_by": sender}}}
+                with mock.patch.object(plugin, "engine", return_value={"inbound": [review]}):
+                    _, requests = plugin.check_pairings(self.home)
+                self.assertEqual(bool(requests), counted)
 
     def test_modern_verified_job_remains_resumable_after_qr_expiry(self):
         record = self.pending(expires_at="2020-01-01T00:00:00Z", used_by="actor_reserved",
@@ -125,7 +142,7 @@ class LegacyPairingStateTests(unittest.TestCase):
         self.home.save(self.state)
         with mock.patch.object(plugin, "engine", return_value={"inbound": []}), \
                 mock.patch.object(plugin, "finish_pairing", return_value={"actor_id": "actor_reserved"}) as finish:
-            self.assertEqual(plugin.check_pairings(self.home), [{"actor_id": "actor_reserved"}])
+            self.assertEqual(plugin.check_pairings(self.home), ([{"actor_id": "actor_reserved"}], []))
         self.assertEqual(finish.call_count, 1)
         self.assertEqual(plugin.pairing_warnings(self.home.state()), [])
 

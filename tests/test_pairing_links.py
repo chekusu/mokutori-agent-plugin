@@ -53,7 +53,7 @@ class PairingLinks(unittest.TestCase):
             self.assertEqual(home.state()["pairings"][result["pairing_id"]]["expires_at"], result["expires_at"])
             self.assertEqual(len(home.state()["pairings"]), 1)
             self.assertIn("both the QR PNG and pair_link", result["show_owner"])
-            self.assertIn("paired list is nonempty", result["next"])
+            self.assertIn("`paired` is nonempty", result["next"]); self.assertIn("pair-accept", result["next"])
             self.assertNotIn("paired", result)
 
     def test_brand_field_follows_the_saved_agent_in_both_links(self):

@@ -95,13 +95,29 @@ class PluginFlow(unittest.TestCase):
                  "warnings": [] if i else ["lowContrast"], "text": "第 %d 页 領収書 合計 ￥1,280" % (start + i),
                  "jpeg": jpeg} for i in range(count)]
 
+    def confirm_pairings(self):
+        """What the owner does when asked: confirm every pairing request, as `pair-check` then `pair-accept`."""
+        checked = self.mokutori("pair-check")
+        paired = list(checked["paired"])
+        for request in checked["pair_requests"]:
+            paired += self.mokutori("pair-accept", request["pairing_id"])["paired"]
+        return dict(checked, paired=paired)
+
+    @staticmethod
+    def confirm_in_state(home):
+        state = home.state()
+        for pairing in state["pairings"].values():
+            if plugin.pairing_state(pairing) == "requested":
+                pairing["owner_confirmed"] = True
+        home.save(state)
+
     def paired_device(self, agent="other"):
         setup = self.setup_agent(agent)
         pairing = self.mokutori("pair")
         ipad = app.App()
         status, receipt = ipad.pair(pairing["pair_url"])
         self.assertEqual(status, 202, receipt)
-        paired = self.mokutori("pair-check")
+        paired = self.confirm_pairings()
         self.assertEqual(len(paired["paired"]), 1, paired)
         return setup, ipad, receipt
 
@@ -127,7 +143,7 @@ class PluginFlow(unittest.TestCase):
         ipad = app.App()
         status, receipt = ipad.pair(pairing["pair_url"], "书房 iPad")
         self.assertEqual(status, 202, receipt)
-        self.assertEqual(self.mokutori("pair-check")["paired"][0]["actor_id"], ipad.state["actor_id"])
+        self.assertEqual(self.confirm_pairings()["paired"][0]["actor_id"], ipad.state["actor_id"])
 
         inbox = self.mokutori("inbox")
         self.assertEqual(inbox["batches"], [], inbox)
@@ -143,7 +159,7 @@ class PluginFlow(unittest.TestCase):
         forged.state = dict(intruder.state)
         forged.state.pop("conversation_id", None)
         forged.message("%s %s %s" % (app.PAIR_PREFIX, code["pairing_id"], "A" * 43), [])
-        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+        self.assertEqual(self.confirm_pairings()["paired"], [])
         self.assertEqual(len(self.mokutori("devices")["devices"]), 1)
 
         chosen, attachments, text = app.pack(self.pages(3))
@@ -186,19 +202,19 @@ class PluginFlow(unittest.TestCase):
         self.assertTrue(pairing["pair_link"].startswith("https://mokutori.com/pair#"))
         self.assertEqual(app.parse_pairing(pairing["pair_link"]), app.parse_pairing(pairing["pair_url"]))
         # A generated link alone has not established a connection.
-        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+        self.assertEqual(self.confirm_pairings()["paired"], [])
 
         phone = app.App()
         status, receipt = phone.pair(pairing["pair_link"], "Synthetic iPhone")
         self.assertEqual(status, 202, receipt)
-        paired = self.mokutori("pair-check")
+        paired = self.confirm_pairings()
         self.assertEqual(paired["paired"][0]["actor_id"], phone.state["actor_id"])
         self.assertEqual(self.status_of(phone, receipt["message_id"])["code"], "read")
 
         other_device = app.App()
         status, _ = other_device.pair(pairing["pair_url"])
         self.assertEqual(status, 202)
-        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+        self.assertEqual(self.confirm_pairings()["paired"], [])
         self.assertEqual(len(self.mokutori("devices")["devices"]), 1)
         self.send_page(phone)
         self.assertEqual(len(self.mokutori("inbox")["batches"]), 1)
@@ -220,7 +236,7 @@ class PluginFlow(unittest.TestCase):
         code = self.mokutori("pair")
         ipad = app.App()
         _, receipt = ipad.pair(code["pair_url"])
-        self.assertEqual(self.mokutori("pair-check")["paired"][0]["actor_id"], ipad.state["actor_id"])
+        self.assertEqual(self.confirm_pairings()["paired"][0]["actor_id"], ipad.state["actor_id"])
         # This direct metadata query exercises the non-CLI owner credential path.
         self.assertEqual(plugin.owner_job_context(home, home.state()["setup"], receipt["message_id"])["state"], "completed")
         message_id = self.send_page(ipad)
@@ -254,7 +270,7 @@ class PluginFlow(unittest.TestCase):
         self.assertEqual(app.parse_pairing(code["pair_link"])["agent"], "grok-bot")
         ipad = app.App()
         ipad.pair(code["pair_url"])
-        self.assertEqual(len(self.mokutori("pair-check")["paired"]), 1)
+        self.assertEqual(len(self.confirm_pairings()["paired"]), 1)
 
     def test_setup_requires_a_name_and_rename_updates_the_gateway_card(self):
         refused = self.mokutori("setup", "--gateway", self.url, "--agent", "grok", expect_ok=False)
@@ -352,16 +368,76 @@ class PluginFlow(unittest.TestCase):
                 raise plugin.MokutoriError("simulated interruption before admission")
             return original(home_dir, *args, **kwargs)
         home = plugin.Home(self.home)
+        plugin.check_pairings(home)
+        self.confirm_in_state(home)
         with mock.patch.object(plugin, "engine", side_effect=interrupt_accept):
             with self.assertRaises(plugin.MokutoriError):
                 plugin.check_pairings(home)
         self.assertEqual(home.state()["devices"], {})
         intruder = app.App()
         intruder.pair(pairing["pair_url"])
-        result = self.mokutori("pair-check")
+        result = self.confirm_pairings()
         self.assertEqual([device["actor_id"] for device in result["paired"]], [ipad.state["actor_id"]])
         self.assertEqual(self.status_of(ipad, receipt["message_id"])["code"], "read")
         self.assertEqual(len(self.mokutori("devices")["devices"]), 1)
+
+    def test_owner_must_confirm_before_the_device_may_send_pages(self):
+        setup = self.setup_agent()
+        pairing = self.mokutori("pair", "--label", "书房")
+        ipad = app.App()
+        _, receipt = ipad.pair(pairing["pair_url"], "书房 iPad")
+        checked = self.mokutori("pair-check")
+        self.assertEqual(checked["paired"], [])
+        self.assertEqual([r["pairing_id"] for r in checked["pair_requests"]], [pairing["pairing_id"]])
+        request = checked["pair_requests"][0]
+        self.assertEqual(request["device_name_untrusted"], "书房 iPad")
+        self.assertTrue(request["device_key_fingerprint"])
+        self.assertIn("pair-accept", checked["note"])
+        self.assertEqual(self.mokutori("status")["pair_requests"], 1)
+        self.assertNotEqual(self.status_of(ipad, receipt["message_id"])["code"], "read")
+        status, contact = app.call(self.url, "GET", "/v1/bots/%s/contact" % setup["bot_id"], token=ipad.state["token"])
+        self.assertNotIn("files", contact.get("explicit_grants") or [], contact)
+        self.assertEqual(self.mokutori("pair-requests")["pair_requests"], checked["pair_requests"])
+        accepted = self.mokutori("pair-accept", pairing["pairing_id"])
+        self.assertEqual([d["actor_id"] for d in accepted["paired"]], [ipad.state["actor_id"]])
+        self.assertEqual(self.status_of(ipad, receipt["message_id"])["code"], "read")
+        status, contact = app.call(self.url, "GET", "/v1/bots/%s/contact" % setup["bot_id"], token=ipad.state["token"])
+        self.assertEqual(contact["status"], "active", contact)
+        self.assertTrue({"chat", "files"} <= set(contact["explicit_grants"]), contact)
+        self.mokutori("pair-accept", pairing["pairing_id"], expect_ok=False)
+        self.send_page(ipad)
+        self.assertEqual(len(self.mokutori("inbox")["batches"]), 1)
+
+    def test_declined_request_ends_at_the_gateway(self):
+        self.setup_agent()
+        pairing = self.mokutori("pair")
+        ipad = app.App()
+        _, receipt = ipad.pair(pairing["pair_url"])
+        self.mokutori("pair-check")
+        self.mokutori("pair-decline", pairing["pairing_id"])
+        self.assertEqual(self.status_of(ipad, receipt["message_id"])["state"], "declined")
+        self.assertEqual(self.mokutori("pair-requests")["pair_requests"], [])
+        self.assertEqual(self.mokutori("devices")["devices"], [])
+        self.mokutori("pair-accept", pairing["pairing_id"], expect_ok=False)
+
+    def test_request_that_arrived_in_time_counts_when_checked_late(self):
+        self.setup_agent()
+        late = self.mokutori("pair")
+        early = self.mokutori("pair")
+        ipad, other = app.App(), app.App()
+        _, in_time = ipad.pair(late["pair_url"])
+        _, too_late = other.pair(early["pair_url"])
+        with closing(sqlite3.connect(str(self.root / "gw" / "gateway.sqlite3"))) as database:
+            # Arrived an hour ago; its code expired half an hour ago.
+            database.execute("UPDATE messages SET created_ts=created_ts-3600 WHERE id=?", (in_time["message_id"],))
+            database.commit()
+        home = plugin.Home(self.home)
+        state = home.state()
+        state["pairings"][late["pairing_id"]]["expires_at"] = plugin.iso(plugin.now() - plugin.dt.timedelta(minutes=30))
+        state["pairings"][early["pairing_id"]]["expires_at"] = plugin.iso(plugin.now() - plugin.dt.timedelta(minutes=30))
+        home.save(state)
+        requests = self.mokutori("pair-check")["pair_requests"]
+        self.assertEqual([r["pairing_id"] for r in requests], [late["pairing_id"]])
 
     def test_unpair_cancels_unreceived_pages(self):
         _, ipad, _ = self.paired_device()
@@ -372,7 +448,7 @@ class PluginFlow(unittest.TestCase):
         self.assertEqual(list((self.home / "inbox").iterdir()), [])
         status, _ = ipad.message("new pages after disconnect", [])
         self.assertGreaterEqual(status, 400)
-        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+        self.assertEqual(self.confirm_pairings()["paired"], [])
 
     def test_expired_pairing_proof_cache_is_finished(self):
         self.setup_agent()
@@ -380,6 +456,8 @@ class PluginFlow(unittest.TestCase):
         ipad = app.App()
         _, receipt = ipad.pair(pairing["pair_url"])
         home = plugin.Home(self.home)
+        plugin.check_pairings(home)
+        self.confirm_in_state(home)
         def interrupt_after_claim(home, state, setup, summary, **kwargs):
             plugin.reader_job(home, setup, "claim", summary["job_id"], "--lease-seconds", "600")
             raise plugin.MokutoriError("simulated process exit after proof claim")
@@ -389,7 +467,7 @@ class PluginFlow(unittest.TestCase):
         with closing(sqlite3.connect(str(self.root / "gw" / "gateway.sqlite3"))) as database:
             database.execute("UPDATE messages SET lease_expires=? WHERE id=?", (time.time() - 1, receipt["message_id"]))
             database.commit()
-        paired = self.mokutori("pair-check")
+        paired = self.confirm_pairings()
         self.assertEqual([item["actor_id"] for item in paired["paired"]], [ipad.state["actor_id"]])
         self.assertTrue(home.state()["pairings"][pairing["pairing_id"]]["proof_finished"])
         self.assertEqual(self.mokutori("inbox")["batches"], [])
@@ -520,19 +598,19 @@ class PluginFlow(unittest.TestCase):
             status, receipt = ipad.pair(pairing["pair_url"], "prefix mismatch iPad")
             wrong_mac = app.proof(code["secret"], code["pairing_id"], code["bot_id"], ipad.state["actor_id"])
         self.assertEqual(status, 202, receipt)
-        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+        self.assertEqual(self.confirm_pairings()["paired"], [])
         self.assertEqual(self.mokutori("devices")["devices"], [])
 
         # Relabelling that HMAC as the expected prefix must also fail.
         status, receipt = ipad.message("%s %s %s" % (app.PAIR_PREFIX, code["pairing_id"], wrong_mac), [])
         self.assertEqual(status, 202, receipt)
-        self.assertEqual(self.mokutori("pair-check")["paired"], [])
+        self.assertEqual(self.confirm_pairings()["paired"], [])
 
         # Rejected attempts do not consume the QR; the correctly bound proof works.
         correct_mac = app.proof(code["secret"], code["pairing_id"], code["bot_id"], ipad.state["actor_id"])
         status, receipt = ipad.message("%s %s %s" % (app.PAIR_PREFIX, code["pairing_id"], correct_mac), [])
         self.assertEqual(status, 202, receipt)
-        self.assertEqual(self.mokutori("pair-check")["paired"][0]["actor_id"], ipad.state["actor_id"])
+        self.assertEqual(self.confirm_pairings()["paired"][0]["actor_id"], ipad.state["actor_id"])
 
 
 class PairingRules(unittest.TestCase):

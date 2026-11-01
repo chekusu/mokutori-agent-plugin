@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
+- Pairing now waits for the owner. A verified pairing request is recorded, not admitted:
+  `pair-check`, `pair-requests` and `inbox` list it in `pair_requests`, the agent asks the owner, and
+  `pair-accept PAIRING_ID` admits the device (grants `chat,files` and accepts the request). `pair-decline
+  PAIRING_ID` rejects the request at the gateway, so Mokutori can tell the owner it was declined.
+- A pairing request counts when it reached the gateway before its code expired, however late the agent
+  reads it. Before, an agent that checked after the 15 minutes silently dropped a request that had arrived
+  in time, and Mokutori waited forever.
+- The skill tells agents to keep checking with a short scheduled task after `pair`, and to accept only
+  after the owner agrees. Pairing records saved by 0.2.x keep their behaviour.
+
 ## [0.2.5] - 2026-10-28
 
 - Add the optional agent brand `a` to both pairing links: `grok-bot` for `--agent grok` and `muse` for
