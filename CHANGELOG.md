@@ -2,10 +2,14 @@
 
 ## [Unreleased]
 
-- Add `wake set --url-file F --secret-file F`, `wake status` and `wake clear`: register a routine's webhook
-  with the gateway's hosted wakes, so the gateway wakes a hosted agent such as Grok Bot when a pairing request
-  or pages arrive. The URL and key are read from private files and never printed. Gateways without hosted
-  wakes are reported plainly; the skill then keeps the scheduled check.
+- Add `wake set --url-file F --secret-file F`, `wake status`, `wake test` and `wake clear` for Yobiru 0.7.17
+  hosted wakes: the gateway calls a routine's webhook when a pairing request or pages arrive, so a hosted agent
+  such as Grok Bot is woken without a machine running a connector. Registering sends a note telling the agent to
+  run `pair-requests` and `inbox` (the gateway's own text names no client) and a test wake unless `--no-test`.
+  `wake status` shows failures, the next allowed wake and a route the gateway turned off. The URL and key are read
+  from private files and never printed; gateways without hosted wakes are reported plainly.
+- Update the bundled engine to Yobiru 0.7.17. It opens sealed fields of up to 16 MiB, so a full 8 MiB batch from
+  Mokutori can be read once the app sends one.
 
 ## [0.3.0] - 2026-11-01
 

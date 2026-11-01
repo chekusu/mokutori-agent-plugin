@@ -95,11 +95,17 @@ until it does. Where the gateway offers hosted wakes, it can call a routine's we
    The routine's Webhook section shows the URL and the key (sent as `Authorization: Bearer <key>`).
 2. Write the URL and the key each alone into a file only the owner can read (`umask 077`), using the host's
    secure input; never put them in chat or on a command line.
-3. `sh M wake set --url-file URL_FILE --secret-file KEY_FILE`. `sh M wake status` shows the last wake;
-   `sh M wake clear` removes it. Add `--no-review` to wake only for paired devices, not pairing requests.
+3. `sh M wake set --url-file URL_FILE --secret-file KEY_FILE` registers it and sends a test wake
+   (`yobiru.ping`); check in the routine's run history that it ran. The webhook must be https on port 443.
+   `sh M wake status` shows the last wake, failures and when the next may go; `sh M wake test` sends another
+   test; `sh M wake clear` removes the route. Add `--no-review` to wake only for paired devices, not pairing
+   requests.
 
-The gateway sends ids only, never page content. If `wake set` says the gateway does not offer hosted wakes,
-keep the scheduled check from the pairing steps.
+The gateway sends ids and a short note telling you to run `pair-requests` and `inbox`, never page content, and
+signs each call (`X-Yobiru-Signature`). It waits for a burst of pages to settle, so one wake covers it. After
+repeated failures it backs off and finally turns the route off; `wake status` then says so and `wake set` turns
+it on again. If `wake set` says the gateway does not offer hosted wakes, keep the scheduled check from the
+pairing steps.
 
 `pair_link` uses `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...`, followed by `&a=grok-bot`
 or `&a=muse` for those agents. Keep the parameters

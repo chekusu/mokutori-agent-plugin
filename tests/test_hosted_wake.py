@@ -50,7 +50,7 @@ class HostedWakeCommandTests(unittest.TestCase):
             return 200, dict(answer, ok=True)
         stream = io.StringIO()
         arguments = SimpleNamespace(wake_cmd=command, url_file=self.files["url"], secret_file=self.files["key"],
-                                    no_review=options.get("no_review", False))
+                                    no_review=options.get("no_review", False), no_test=options.get("no_test", False))
         with mock.patch.object(plugin.C, "api_ok", side_effect=api_ok), redirect_stdout(stream):
             with self.assertRaises(SystemExit) as done:
                 plugin.cmd_wake(self.home, arguments)
@@ -62,15 +62,29 @@ class HostedWakeCommandTests(unittest.TestCase):
         self.assertEqual(0, code)
         base, method, path, body, token = self.calls[0]
         self.assertEqual((GATEWAY, "PUT", "/v1/owner/bots/bot_fixture/wake", "own_secret"), (base, method, path, token))
-        self.assertEqual({"url": URL, "secret": KEY, "wake_on_review": True}, body)
+        self.assertEqual({"url": URL, "secret": KEY, "note": plugin.WAKE_NOTE, "wake_on_review": True, "test": True},
+                         body)
+        self.assertIn("mokutori inbox", plugin.WAKE_NOTE)
         result = json.loads(printed)
         self.assertTrue(result["wake"]["configured"])
         for secret in (KEY, "abc123-token", "own_secret"):
             self.assertNotIn(secret, printed)
 
     def test_no_review_wakes_only_for_paired_devices(self):
-        self.run_wake("set", {"configured": True}, no_review=True)
+        self.run_wake("set", {"configured": True}, no_review=True, no_test=True)
         self.assertFalse(self.calls[0][3]["wake_on_review"])
+        self.assertFalse(self.calls[0][3]["test"])
+
+    def test_test_sends_a_ping_then_shows_status(self):
+        self.run_wake("test", {"configured": True, "test_pending": True})
+        self.assertEqual([("POST", "/v1/owner/bots/bot_fixture/wake/test"), ("GET", "/v1/owner/bots/bot_fixture/wake")],
+                         [(c[1], c[2]) for c in self.calls])
+
+    def test_a_route_the_gateway_turned_off_says_so(self):
+        code, printed = self.run_wake("status", {"configured": True, "enabled": False, "consecutive_failures": 5})
+        result = json.loads(printed)
+        self.assertEqual(5, result["wake"]["consecutive_failures"])
+        self.assertIn("turned this route off", result["note"])
 
     def test_status_and_clear(self):
         self.run_wake("status", {"configured": False})

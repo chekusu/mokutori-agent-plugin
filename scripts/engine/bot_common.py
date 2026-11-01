@@ -21,7 +21,9 @@ import threading
 import time
 import unicodedata
 import urllib.parse
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 
 API_VERSION = 1
 SERVICE = "yobiru-bot-gateway"
@@ -58,6 +60,14 @@ MEDIA_MAX_BYTES = 4 * 1024 * 1024           # one media file, raw bytes (the def
 NAME_RESERVED_CHARS = set('/\\:*?"<>|')
 WINDOWS_DEVICE_RE = re.compile("^(?:con|prn|aux|nul|clock\\$|conin\\$|conout\\$|com[0-9\u00b9\u00b2\u00b3]|"
                                "lpt[0-9\u00b9\u00b2\u00b3])\\Z", re.I)
+
+
+class NumericHTTPServer(ThreadingHTTPServer):
+    """Use the bound address for HTTP metadata without a blocking reverse DNS lookup."""
+
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class StrictJSONError(ValueError):
@@ -565,6 +575,101 @@ def read_json_file(path, limit=1024 * 1024, private=False, what="file"):
 
 
 # ---------------------------------------------------------------- HTTP client
+class _ProxyHTTPSConnection(http.client.HTTPSConnection):
+    """Expose the TLS socket to _Deadline before the handshake can block."""
+
+    def connect(self):
+        started = time.monotonic()
+        # HTTPConnection.connect uses the standard CONNECT implementation and its tunnel headers.
+        http.client.HTTPConnection.connect(self)
+        if time.monotonic() - started >= self.timeout:
+            raise socket.timeout("deadline exceeded")
+        # wrap_socket normally detaches the raw socket while doing the handshake. Publish the SSL
+        # socket first so the total deadline can still shut it down, including after a slow CONNECT.
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self._tunnel_host,
+                                              do_handshake_on_connect=False)
+        # Also bound the handshake if the deadline fires in wrap_socket's brief detach/assign gap.
+        remaining = self.timeout - (time.monotonic() - started)
+        if remaining <= 0:
+            raise socket.timeout("deadline exceeded")
+        self.sock.settimeout(remaining)
+        self.sock.do_handshake()
+        self.sock.settimeout(self.timeout)
+
+
+def _https_proxy():
+    """Return explicit HTTP proxy settings, or None. Never include configuration values in errors."""
+    selector = os.environ.get("YOBIRU_HTTPS_PROXY_ENV")
+    if selector is None:
+        return None
+
+    def invalid():
+        return ApiError(None, "proxy_config", "check YOBIRU_HTTPS_PROXY_ENV and its selected HTTP proxy URL")
+
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", selector):
+        raise invalid()
+    value = os.environ.get(selector)
+    if not value or len(value) > 8192 or any(c.isspace() or unicodedata.category(c) in ("Cc", "Cs") for c in value):
+        raise invalid()
+    try:
+        u = urllib.parse.urlsplit(value)
+        port = u.port
+        host = u.hostname
+        if u.scheme != "http" or not host or u.path not in ("", "/") or "?" in value or "#" in value:
+            raise ValueError()
+        authority = u.netloc.rsplit("@", 1)[-1]
+        if port == 0 or authority.endswith(":") or "\\" in authority or "%" in authority:
+            raise ValueError()
+        if ":" in host:
+            if not re.fullmatch(r"\[[0-9A-Fa-f:.]+\](?::[0-9]+)?", authority):
+                raise ValueError()
+            ipaddress.IPv6Address(host)
+        elif not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", authority) or len(host) > 253 or not all(
+                re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                for label in (host[:-1] if host.endswith(".") else host).split(".")):
+            raise ValueError()
+        headers = {}
+        if "@" in u.netloc:
+            userinfo = u.netloc.rsplit("@", 1)[0]
+            if userinfo.count("@") or ":" not in userinfo or re.search(r"%(?![0-9A-Fa-f]{2})", userinfo):
+                raise ValueError()
+            username, password = (urllib.parse.unquote(part, encoding="utf-8", errors="strict")
+                                  for part in userinfo.split(":", 1))
+            if not username or ":" in username or any(
+                    unicodedata.category(c) in ("Cc", "Cs") for c in username + password):
+                raise ValueError()
+            auth = base64.b64encode((username + ":" + password).encode("utf-8")).decode("ascii")
+            headers["Proxy-Authorization"] = "Basic " + auth
+        return host, port or 80, headers
+    except (ValueError, UnicodeError):
+        raise invalid() from None
+
+
+def _friends_connection(u, timeout):
+    """Route only these Friends HTTPS helpers through an explicitly selected HTTP CONNECT proxy."""
+    if u.scheme != "https":
+        return http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+    proxy = _https_proxy()
+    context = ssl.create_default_context()
+    if proxy is None:
+        return http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout, context=context)
+    host, port, headers = proxy
+    # Older stdlib versions emit an unbracketed IPv6 CONNECT authority. Refuse that case
+    # instead of sending an ambiguous destination; the direct HTTPS path stays unchanged.
+    if ":" in u.hostname and not hasattr(http.client.HTTPConnection, "_wrap_ipv6"):
+        raise ApiError(None, "proxy_config", "this Python version cannot tunnel an IPv6 destination")
+    target = u.hostname.encode("idna").decode("ascii")
+    if ":" in target:
+        # stdlib brackets the CONNECT target but not its automatic Host header.
+        # Keep the unbracketed target for TLS certificate verification.
+        headers["Host"] = "[%s]:%d" % (target, u.port or 443)
+    conn = _ProxyHTTPSConnection(host, port, timeout=timeout, context=context)
+    # A process-wide http.client debuglevel must not print CONNECT credentials or gateway tokens.
+    conn.set_debuglevel(0)
+    conn.set_tunnel(target, u.port or 443, headers=headers)
+    return conn
+
+
 class _Deadline(object):
     """Total time limit for one exchange: when it passes the socket is shut down, so a server that
     trickles bytes cannot hold the client longer than `seconds`.
@@ -667,12 +772,7 @@ def api_call(base_url, method, path, body=None, token=None, timeout=15.0):
     any, is only ever sent to the normalized `base_url` it belongs to."""
     base = normalize_base_url(base_url)
     u = urllib.parse.urlsplit(base)
-    host, port = u.hostname, u.port
-    if u.scheme == "https":
-        conn = http.client.HTTPSConnection(host, port or 443, timeout=timeout,
-                                           context=ssl.create_default_context())
-    else:
-        conn = http.client.HTTPConnection(host, port or 80, timeout=timeout)
+    conn = _friends_connection(u, timeout)
     headers = {"Accept": "application/json", "User-Agent": "yobiru-public/%d" % API_VERSION}
     if token is not None:
         if token_kind(token) is None:
@@ -690,7 +790,7 @@ def api_call(base_url, method, path, body=None, token=None, timeout=15.0):
             raw = read_bounded(resp, d, timeout)
             d.check()            # a body that completed only because the deadline cut it short is not a success
         except (OSError, http.client.HTTPException) as e:
-            raise ApiError(None, "unreachable", "%s%s" % (type(e).__name__, " (deadline)" if d.expired else ""))
+            raise ApiError(None, "unreachable", "%s%s" % (type(e).__name__, " (deadline)" if d.expired else "")) from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ApiError(resp.status, "response_too_large")
     if 300 <= resp.status < 400:
@@ -711,11 +811,7 @@ def post_raw(base_url, path, data, headers, timeout=60.0):
     and the answer is bounded."""
     base = normalize_base_url(base_url)
     u = urllib.parse.urlsplit(base)
-    if u.scheme == "https":
-        conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout,
-                                           context=ssl.create_default_context())
-    else:
-        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+    conn = _friends_connection(u, timeout)
     hdrs = {"User-Agent": "yobiru-public/%d" % API_VERSION}
     hdrs.update(headers)
     with _Deadline(conn, transfer_seconds(timeout, len(data))) as d:
@@ -726,7 +822,7 @@ def post_raw(base_url, path, data, headers, timeout=60.0):
             raw = read_bounded(resp, d, timeout)
             d.check()
         except (OSError, http.client.HTTPException) as e:
-            raise ApiError(None, "unreachable", "%s%s" % (type(e).__name__, " (deadline)" if d.expired else ""))
+            raise ApiError(None, "unreachable", "%s%s" % (type(e).__name__, " (deadline)" if d.expired else "")) from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ApiError(resp.status, "response_too_large")
     if 300 <= resp.status < 400:
@@ -740,11 +836,7 @@ def get_raw(base_url, path, max_bytes, timeout=15.0):
     larger than `max_bytes` is refused instead of returned."""
     base = normalize_base_url(base_url)
     u = urllib.parse.urlsplit(base)
-    if u.scheme == "https":
-        conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout,
-                                           context=ssl.create_default_context())
-    else:
-        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+    conn = _friends_connection(u, timeout)
     with _Deadline(conn, timeout) as d:
         try:
             d.connect()
@@ -754,7 +846,7 @@ def get_raw(base_url, path, max_bytes, timeout=15.0):
             raw = resp.read(max_bytes + 1)
             d.check()
         except (OSError, http.client.HTTPException) as e:
-            raise ApiError(None, "unreachable", "%s%s" % (type(e).__name__, " (deadline)" if d.expired else ""))
+            raise ApiError(None, "unreachable", "%s%s" % (type(e).__name__, " (deadline)" if d.expired else "")) from None
     if 300 <= resp.status < 400:
         raise ApiError(resp.status, "redirect_refused")
     if len(raw) > max_bytes:
@@ -792,21 +884,89 @@ def wake_url(url):
     return u
 
 
-def post_wake(url, headers, body, timeout=20.0):
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Connects to an address checked beforehand, so a second DNS answer cannot redirect the request."""
+
+    def __init__(self, host, port, address, **kwargs):
+        http.client.HTTPConnection.__init__(self, host, port, **kwargs)
+        self._address = address
+
+    def connect(self):
+        self.sock = socket.create_connection((self._address, self.port), self.timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """TLS to an address checked beforehand; the certificate is still verified for the URL's host name."""
+
+    def __init__(self, host, port, address, **kwargs):
+        http.client.HTTPSConnection.__init__(self, host, port, **kwargs)
+        self._address = address
+
+    def connect(self):
+        sock = socket.create_connection((self._address, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+# IPv4/IPv6 translation (NAT64) can reach private destinations although ipaddress counts these prefixes as
+# global: the well-known and the local-use range are refused outright.
+NAT64_NETWORKS = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+
+
+def is_public_address(text):
+    """A global unicast address that does not lead into a private network. NAT64 addresses are refused; other IPv6
+    forms that embed an IPv4 address (mapped, 6to4, Teredo) are judged by that address too."""
+    try:
+        ip = ipaddress.ip_address(text.split("%")[0])
+    except ValueError:
+        return False
+    if not ip.is_global or ip.is_multicast:
+        return False
+    if ip.version == 6:
+        if any(ip in net for net in NAT64_NETWORKS):
+            return False
+        inner = [ip.ipv4_mapped, ip.sixtofour] + list(ip.teredo or ())
+        if any(v4 is not None and (not v4.is_global or v4.is_multicast) for v4 in inner):
+            return False
+    return True
+
+
+def public_address(host, port):
+    """The address to call for an endpoint a gateway reaches on someone's behalf: refused (ValueError) unless every
+    address the name resolves to is public, so a webhook cannot point the gateway at its own network. The caller
+    bounds the lookup's time (the gateway's wake process has its own deadline)."""
+    try:
+        found = [info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+    except (OSError, UnicodeError):
+        raise ValueError("the wake host does not resolve")
+    if not found or not all(is_public_address(a) for a in found):
+        raise ValueError("the wake host is not a public address")
+    return found[0]
+
+
+def wake_payload(body):
+    """The exact bytes a wake sends (and a signature covers)."""
+    return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def post_wake(url, headers, body, timeout=20.0, address=None, agent="yobiru-connector"):
     """POST one wake notification. -> (outcome, detail). Redirects are not followed and the answer body is not
-    interpreted: a 2xx means the host accepted the wake (not that any work happened).
+    interpreted: a 2xx means the host accepted the wake (not that any work happened). With `address`, the
+    connection goes to that checked address instead of resolving the host again. `body` is a dict, or the bytes
+    of `wake_payload` when the caller signs them.
       accepted   2xx answer
       refused    no connection could be made: the request never left, so nothing was delivered
       uncertain  anything else once the request may have left: any non-2xx answer (a 5xx or a 429 can follow
                  work the host already queued), a timeout or a reset. It is never treated as not delivered."""
     u = wake_url(url)
     if u.scheme == "https":
-        conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout,
-                                           context=ssl.create_default_context())
+        context = ssl.create_default_context()
+        conn = _PinnedHTTPSConnection(u.hostname, u.port or 443, address, timeout=timeout, context=context) if address \
+            else http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout, context=context)
     else:
-        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
-    data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    hdrs = {"Content-Type": "application/json", "User-Agent": "yobiru-connector/%d" % API_VERSION}
+        conn = _PinnedHTTPConnection(u.hostname, u.port or 80, address, timeout=timeout) if address \
+            else http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+    data = body if isinstance(body, bytes) else wake_payload(body)
+    hdrs = {"Content-Type": "application/json", "User-Agent": "%s/%d" % (agent, API_VERSION)}
     hdrs.update(headers)
     target = (u.path or "/") + ("?" + u.query if u.query else "")
     with _Deadline(conn, timeout) as d:
