@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: chekusu/yobiru
-          ref: 2909af49c0f521fda536e288f47a66cc9f770cfd
+          ref: ebc3e31e30d80081b863e322f4f566daa067f69b
           path: yobiru
           persist-credentials: false
       - name: Set up Python

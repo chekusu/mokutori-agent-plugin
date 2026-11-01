@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-01
+
 - Add `wake set --url-file F --secret-file F`, `wake status`, `wake test` and `wake clear` for Yobiru 0.7.17
   hosted wakes: the gateway calls a routine's webhook when a pairing request or pages arrive, so a hosted agent
   such as Grok Bot is woken without a machine running a connector. Registering sends a note telling the agent to
