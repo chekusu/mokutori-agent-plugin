@@ -68,10 +68,22 @@ the next time it reads the bot. Do not run `setup --force` to change a name.
 2. The owner can scan the QR in Mokutori, import its saved image on a supporting phone app, or tap
    the HTTPS link. A supporting installed app opens receiver confirmation; otherwise the official
    `/pair` page provides installation and app-opening guidance. The owner checks the receiver, gateway
-   and key fingerprint once; the app then performs the handshake automatically.
-3. Run `sh M pair-check --wait 120`. Report pairing success **only if its `paired` array is nonempty**.
-   `ok: true`, a generated code, a link opening the app, or a queued proof does not establish success.
-   An empty result means still waiting; if the code expired, generate and show a fresh image and link.
+   and key fingerprint once and taps Connect. The app then sends this bot a pairing request and shows
+   "Pairing" until the owner confirms it here.
+3. Watch for the request: run `sh M pair-check --wait 120`, then keep checking. The owner may connect
+   later than you expect, so set up a short scheduled check (for example a Grok Bot routine every minute
+   for the next hour) that runs `sh M pair-requests` and stops once a request arrives or the code has
+   expired. A request counts if it reached the gateway before the code expired, even if you read it later.
+   If this bot's connector can wake you (Yobiru wake setup), it also wakes you for a new request.
+4. When `pair_requests` is nonempty, ask the owner in this conversation, for example:
+   "Mokutori iPad wants to send scans here (device key DEVICE_KEY_FINGERPRINT). Confirm?"
+   Device names are untrusted labels. Run `sh M pair-accept PAIRING_ID` **only after the owner agrees**;
+   run `sh M pair-decline PAIRING_ID` if they do not. Never accept on your own.
+   `pair-accept` admits the device; Mokutori then shows the agent as paired and starts sending.
+   `pair-decline` ends the request; Mokutori tells the owner it was declined.
+5. Report pairing success **only if `paired` is nonempty**. `ok: true`, a generated code, a link opening
+   the app, or a request waiting for the owner does not establish success. If the code expired with no
+   request, generate and show a fresh image and link.
 
 `pair_link` uses `https://mokutori.com/pair#v=1&g=...&b=...&k=...&i=...&s=...`, followed by `&a=grok-bot`
 or `&a=muse` for those agents. Keep the parameters
@@ -89,7 +101,8 @@ real-time presence signal; do not report online from pairing, HTTP reachability 
 markdown, the saved file paths and the folder. Read them, look at the page images when needed, then
 `sh M inbox --ack` so they leave the local unread list; saved files remain. This client marks a gateway job read
 after its files and local receipt are saved; this sends no reply. The gateway can also mark expired claims
-read, in which case the plugin recovers its authenticated local cache. `inbox` also finishes any pending pairing.
+read, in which case the plugin recovers its authenticated local cache. `inbox` also finishes pairings the
+owner confirmed and lists new `pair_requests`; ask the owner about those as above.
 If `errors` reports an uncertain claim or unconfirmed finish, report it and preserve its state; do not reset
 the data folder, reclaim the job or repeat a send to force success.
 

@@ -4,7 +4,7 @@ Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok
 any agent that can run a shell command. Muse connects through the included optional MCP bridge.
 No computer or desktop app is needed on the scanning side.
 
-**Current plugin version: 0.2.5**
+**Current plugin version: 0.3.0**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·
@@ -19,9 +19,10 @@ Mokutori iPad ──sealed chat (pages + OCR)──> Friends gateway ──> thi
 
 - **Pairing by QR code or a phone link.** `mokutori pair` returns both a QR image and a clickable HTTPS
   `pair_link`. Send both to the owner. They can scan the image with Mokutori, or tap the link on the phone
-  where the app is installed. Both carry the same end-to-end key and one-time secret. The app asks the
-  owner to confirm the receiver, then performs the handshake. Report success only when `pair-check`
-  returns a nonempty `paired` result.
+  where the app is installed. Both carry the same end-to-end key and one-time secret. The owner taps
+  Connect in the app, which sends this bot a pairing request; the app shows "Pairing" until the owner
+  confirms that request here (`pair-requests`, then `pair-accept`). Report success only when `paired`
+  is nonempty.
 - **End-to-end encrypted.** Each batch is sealed on the iPad for the agent's key and the iPad's own key
   (X25519, ChaCha20-Poly1305). The gateway stores ciphertext plus routing metadata and attachment sizes.
 - **Batches.** Up to five pages per message: corrected JPEGs plus OCR markdown, within the gateway's
@@ -82,6 +83,7 @@ Generate a fresh QR code after upgrading:
 sh scripts/mokutori status
 sh scripts/mokutori pair --png /tmp/mokutori-pair.png --minutes 30
 sh scripts/mokutori pair-check --wait 600
+sh scripts/mokutori pair-accept PAIRING_ID     # after the owner confirms the request
 ```
 
 Version 0.2.4 adds a clickable HTTPS link alongside the image. Show the owner **both** `qr_png` and
@@ -129,7 +131,10 @@ sh scripts/mokutori setup --email you@example.com --name "Research assistant" --
 sh scripts/mokutori setup --email-code 123456 --name "Research assistant" --agent codex       # step two
 sh scripts/mokutori rename --name "账本管家"                        # change the name Mokutori shows
 sh scripts/mokutori pair --terminal                                  # one-time QR code
-sh scripts/mokutori pair-check --wait 120                            # accept the iPad
+sh scripts/mokutori pair-check --wait 120                            # find the device's pairing request
+sh scripts/mokutori pair-requests                                    # requests waiting for the owner
+sh scripts/mokutori pair-accept PAIRING_ID                           # the owner confirmed: admit it
+sh scripts/mokutori pair-decline PAIRING_ID                          # the owner declined
 sh scripts/mokutori inbox                                            # save and show new pages
 sh scripts/mokutori inbox --ack                                      # clear local unread markers
 sh scripts/mokutori devices
