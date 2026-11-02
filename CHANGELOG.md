@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-02
+
 - A second agent of the same owner sets up with the owner's email. The official gateway lets one email register
   one owner, so a Muse set up after a Grok Bot stopped at `email_in_use`, and the only way round it copied the
   owner credential, which administers every bot, to the new machine. `setup --email-code` now adds the new bot to
