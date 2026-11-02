@@ -4,7 +4,7 @@ Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok
 any agent that can run a shell command. Muse connects through the included optional MCP bridge.
 No computer or desktop app is needed on the scanning side.
 
-**Current plugin version: 0.3.1**
+**Current plugin version: 0.3.2**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·
@@ -106,9 +106,18 @@ New pairings use `mokutori://pair` and the `mokutori-pair/1` proof prefix. A QR 
 plugin (`mitori://pair`) is not compatible with this protocol; do not reuse it. Pairing codes are one-time secrets and
 expire, so show the new image only to the owner and remove the temporary image after scanning.
 
-For a **new** installation whose owner already uses Yobiru,
-`setup --owner-home /absolute/YOBIRU_HOME --name "YOUR NAME" --agent grok` creates a new Mokutori receiver under
-that existing owner without another email registration.
+An owner often runs several agents (a Grok Bot, then Muse, each on its own cloud computer), and the official
+gateway lets one email register one owner. Setting up a second agent with the same email therefore adds its bot
+to that owner (Yobiru 0.7.20 join): `setup --email` and `setup --email-code` as usual, with the same single code.
+That agent's data home then holds a **manager** credential for its own bot only (`status` shows
+`"credential": "manager"`), never the owner credential, and cannot reach the owner's other bots. `pair-accept`,
+`pair-decline`, `rename`, `wake`, `unpair` and recovery use it as they would an owner credential. The gateway
+emails the owner, who sees the bot and can revoke it from a device with the owner credential (`yobiru public owner
+managers BOT`, `owner revoke-manager BOT ID`).
+
+`setup --owner-home /absolute/YOBIRU_HOME --name "YOUR NAME" --agent grok` creates a new Mokutori receiver under an
+existing owner directory on the same machine. Do not copy an owner directory to another machine for it: that
+credential administers every bot of the owner. Set up with the email instead.
 An existing installation needs only the plugin upgrade; do not rerun a full setup or use `setup --force` to repair it.
 
 ## Bot name and agent mark
@@ -144,11 +153,12 @@ sh scripts/mokutori status
 
 ## Under the hood
 
-The transport is the Yobiru 0.7.14 Friends jobs protocol, pinned to the exact official source revision in
+The transport is the Yobiru Friends jobs protocol (engine 0.7.20), pinned to the exact official source revision in
 `scripts/engine/SOURCE.json`. This plugin does not use the retired notice inbox. `scripts/engine/` is an unmodified copy of the Yobiru
 public-bot client (MIT, see `scripts/engine/LICENSE` and `scripts/engine/SOURCE.json`); `scripts/third_party/qrcodegen.py` is
 Project Nayuki's QR Code generator (MIT). The agent owns a bot on the gateway with two local identities:
-an owner credential (accepts paired iPads) and a native reader binding (claims and reads jobs). The iPad is a
+an administration credential (accepts paired iPads: the owner credential, or for a bot added to an existing
+owner, a manager credential for that bot only) and a native reader binding (claims and reads jobs). The iPad is a
 pseudonymous caller; after pairing it is a trusted contact allowed to send files.
 
 Pairings use the `mokutori-pair/1` proof prefix. `mokutori://pair?...` and the HTTPS fragment link carry

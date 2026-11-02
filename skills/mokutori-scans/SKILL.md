@@ -45,12 +45,18 @@ If you do not know what they call you, ask them before setup.
 2. `sh M setup --email-code CODE --name "YOUR NAME" --agent ...` with the code the owner gives you
    (the first step's `next` repeats the command). Optional `--handle NAME`.
 
+The owner may already use this email for another agent (for example a Grok Bot set up before you). Setup
+then adds your bot to that owner with the same code: nothing else to run, and no second code. `status`
+shows `"credential": "manager"`: this data home administers your bot only, never the owner's other bots,
+and it holds no owner credential. The gateway emails the owner that a bot was added. Every command below
+works the same way. Never ask the owner for their owner credential or another agent's data folder.
+
 Pass the `--agent` you really are: Grok Bot is `grok` and Muse is `muse`; Mokutori then shows that
 agent's mark in colour once paired. Other agents pair the same way without a mark.
 
-If the owner already has a Yobiru owner credential, an authorized **new** setup can instead use
-`sh M setup --owner-home /absolute/YOBIRU_HOME --name "YOUR NAME" --agent ...`. This keeps the owner
-credential in its original directory. Existing setups automatically use their saved location and do not
+`sh M setup --owner-home /absolute/YOBIRU_HOME --name "YOUR NAME" --agent ...` is only for a new setup on
+the same machine as an existing Yobiru owner directory. Do not copy an owner directory to another machine to
+use it: set up with the email instead. Existing setups automatically use their saved location and do not
 need this command.
 
 ## Rename
