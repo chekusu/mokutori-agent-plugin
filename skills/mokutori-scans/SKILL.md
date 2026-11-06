@@ -125,10 +125,15 @@ real-time presence signal; do not report online from pairing, HTTP reachability 
 
 ## Receive pages
 
-`sh M inbox` saves new batches under the data folder and prints, per batch: a short summary, the OCR
-markdown, the saved file paths and the folder. Read them, look at the page images when needed, then
-`sh M inbox --ack` so they leave the local unread list; saved files remain. This client marks a gateway job read
-after its files and local receipt are saved; this sends no reply. The gateway can also mark expired claims
+`sh M inbox` saves new batches under the data folder and prints, per batch: its `message_id`, a short summary,
+the OCR markdown, the saved file paths and the folder. Read them, look at the page images when needed, then
+acknowledge exactly those batches with `sh M inbox --ack MESSAGE_ID ...` (the `next` field spells out the
+command) so they leave the local unread list; saved files remain. `--ack` alone acknowledges every batch an
+earlier `inbox` printed. Pages often keep arriving while you read: a batch that arrived after your last `inbox`
+is never acknowledged; the `--ack` output lists it under `batches`, so read the `--ack` output too and repeat
+until `batches` is empty. A long backlog is printed a part at a time (`remaining` says how many wait), so keep
+going until `remaining` is 0. This client marks a gateway job read after its files and local receipt are saved;
+this sends no reply. The gateway can also mark expired claims
 read, in which case the plugin recovers its authenticated local cache. `inbox` also finishes pairings the
 owner confirmed and lists new `pair_requests`; ask the owner about those as above.
 If `errors` reports an uncertain claim or unconfirmed finish, report it and preserve its state; do not reset

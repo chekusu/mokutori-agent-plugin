@@ -58,7 +58,8 @@ class PluginFlow(unittest.TestCase):
         settings = json.loads(config.read_text())
         settings.setdefault("enrollment", {})["self_enrolled_publish"] = True
         # This loopback-only fixture creates independent synthetic identities for every test.
-        settings.setdefault("limits", {}).update(bot_enroll_per_hour_per_ip=100, enroll_per_hour_per_ip=100)
+        settings.setdefault("limits", {}).update(bot_enroll_per_hour_per_ip=100, enroll_per_hour_per_ip=100,
+                                                  bot_enroll_per_hour=100, enroll_per_hour=200)
         config.write_text(json.dumps(settings))
         cls.server = subprocess.Popen(gateway + ["serve"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         cls.url = json.loads(cls.server.stdout.readline())["listening"]
@@ -189,7 +190,10 @@ class PluginFlow(unittest.TestCase):
         self.assertEqual(Path(images[0]["path"]).stat().st_mtime_ns, before)
         self.assertGreaterEqual(inbox["ignored_from_unpaired_senders"], 1)  # unpaired jobs remain unclaimed
 
-        self.assertEqual(len(self.mokutori("inbox", "--ack")["batches"]), 1)
+        acked = self.mokutori("inbox", "--ack")
+        self.assertEqual(acked["acknowledged_ids"], [batch["message_id"]], acked)
+        self.assertEqual(acked["batches"], [])
+        self.assertIsNone(acked["next"])
         self.assertEqual(self.mokutori("inbox")["batches"], [])
 
         self.mokutori("unpair", ipad.state["actor_id"])
@@ -553,8 +557,11 @@ class PluginFlow(unittest.TestCase):
                 self.assertEqual(result["errors"], [], result)
                 self.assertEqual(len(result["batches"]), 1, result)
                 self.assertEqual(result["batches"][0]["message_id"], message_id)
+                # Recovered here and shown for the first time, so this --ack does not clear it unseen.
+                self.assertEqual(result["acknowledged_ids"], [])
                 self.assertEqual(self.status_of(ipad, message_id)["code"], "read")
                 self.assertFalse((home.claims / (message_id + ".json")).exists())
+                self.mokutori("inbox", "--ack", message_id)
                 self.assertEqual(self.mokutori("inbox")["batches"], [])
 
     def test_expired_direct_claim_recovers_cached_pages_after_gateway_marks_read(self):
@@ -577,8 +584,10 @@ class PluginFlow(unittest.TestCase):
                 self.assertEqual(result["errors"], [], result)
                 self.assertEqual(len(result["batches"]), 1, result)
                 self.assertEqual(result["batches"][0]["message_id"], message_id)
+                self.assertEqual(result["acknowledged_ids"], [])
                 self.assertEqual(self.status_of(ipad, message_id)["code"], "read")
                 self.assertTrue(home.state()["received"][message_id]["remote_finished"])
+                self.mokutori("inbox", "--ack")
                 self.assertEqual(self.mokutori("inbox")["batches"], [])
 
     def test_two_queued_batches_arrive_in_one_inbox(self):
@@ -587,6 +596,44 @@ class PluginFlow(unittest.TestCase):
         result = self.mokutori("inbox")
         self.assertEqual(result["errors"], [], result)
         self.assertEqual({batch["message_id"] for batch in result["batches"]}, {first, second})
+
+    def test_ack_never_clears_a_batch_that_arrived_after_the_read(self):
+        # Continuous sending: the next batch lands between the agent's `inbox` and its `inbox --ack`.
+        _, ipad, _ = self.paired_device()
+        first = self.send_page(ipad)
+        self.assertEqual([batch["message_id"] for batch in self.mokutori("inbox")["batches"]], [first])
+        second = self.send_page(ipad)
+        acked = self.mokutori("inbox", "--ack")
+        self.assertEqual(acked["acknowledged_ids"], [first], acked)
+        # The new batch is shown as unread in the same output, and stays unread until the agent acknowledges it.
+        self.assertEqual([batch["message_id"] for batch in acked["batches"]], [second], acked)
+        self.assertIn("--ack", acked["next"])
+        self.assertEqual([batch["message_id"] for batch in self.mokutori("inbox")["batches"]], [second])
+        self.assertEqual(self.mokutori("inbox", "--ack")["acknowledged_ids"], [second])
+        self.assertEqual(self.mokutori("inbox")["batches"], [])
+
+    def test_ack_by_message_id_clears_only_those_batches(self):
+        _, ipad, _ = self.paired_device()
+        first, second = self.send_page(ipad), self.send_page(ipad)
+        self.assertEqual(len(self.mokutori("inbox")["batches"]), 2)
+        acked = self.mokutori("inbox", "--ack", second)
+        self.assertEqual(acked["acknowledged_ids"], [second], acked)
+        self.assertEqual([batch["message_id"] for batch in acked["batches"]], [first])
+        refused = self.mokutori("inbox", "--ack", "msg_aaaaaaaaaaaaaaaa", expect_ok=False)
+        self.assertIn("msg_aaaaaaaaaaaaaaaa", refused["error"])
+        self.assertEqual([batch["message_id"] for batch in self.mokutori("inbox")["batches"]], [first])
+
+    def test_long_backlog_is_shown_in_parts_and_says_how_many_remain(self):
+        _, ipad, _ = self.paired_device()
+        sent = [self.send_page(ipad) for _ in range(3)]
+        shown = self.mokutori("inbox", "--limit", "2")
+        self.assertEqual([batch["message_id"] for batch in shown["batches"]], sent[:2])
+        self.assertEqual(shown["remaining"], 1, shown)
+        acked = self.mokutori("inbox", "--ack", "--limit", "2")
+        # Only the two batches that were shown are cleared; the third is shown now, never cleared unseen.
+        self.assertEqual(acked["acknowledged_ids"], sent[:2], acked)
+        self.assertEqual([batch["message_id"] for batch in acked["batches"]], sent[2:])
+        self.assertEqual(acked["remaining"], 0)
 
     def test_pairing_rejects_other_prefix_and_wrong_prefix_mac(self):
         self.setup_agent()
@@ -663,6 +710,35 @@ class PackingRules(unittest.TestCase):
             if "content" in item:
                 self.assertLessEqual(len(item["content"].encode("utf-8")), app.MAX_TEXT_FILE_BYTES)
         self.assertLessEqual(len(text), app.MAX_TEXT_CHARS)
+
+
+class InboxOutput(unittest.TestCase):
+    def receipts(self, count, characters):
+        return {"msg_%016d" % (count - n): {"sender": "actor_x", "remote_finished": True, "acknowledged": False,
+                                           "seq": n + 1,
+                                           "batch": {"message_id": "msg_%016d" % (count - n), "summary": "第 %d 页" % n,
+                                                     "ocr_markdown": "字" * characters, "files": []}}
+                for n in range(count)}
+
+    def test_long_text_is_shown_in_parts_in_arrival_order(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = plugin.Home(folder)
+            # Message ids sort against arrival here, as random ids often do.
+            state = {"received": self.receipts(12, 6000)}
+            batches, remaining = plugin.unread_batches(home, state, 20)
+            self.assertEqual([batch["summary"] for batch in batches], ["第 0 页", "第 1 页", "第 2 页"])
+            self.assertEqual(remaining, 9)
+            self.assertLessEqual(sum(len(json.dumps(batch, ensure_ascii=False, indent=2)) for batch in batches),
+                                 plugin.OUTPUT_CHARACTERS)
+            self.assertEqual(plugin.acknowledge(home, state, []), [batch["message_id"] for batch in batches])
+            batches, remaining = plugin.unread_batches(home, state, 20)
+            self.assertEqual(batches[0]["summary"], "第 3 页")
+            self.assertEqual(remaining, 6)
+
+    def test_one_oversized_batch_is_still_shown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            batches, remaining = plugin.unread_batches(plugin.Home(folder), {"received": self.receipts(2, 30000)}, 20)
+            self.assertEqual((len(batches), remaining), (1, 1))
 
 
 if __name__ == "__main__":
