@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-06
+
+- `inbox --ack` no longer acknowledges batches the agent has not seen. With pages sent continuously, the next
+  batch often arrived between an agent's `inbox` and its `inbox --ack`; the `--ack` run saved it and acknowledged
+  it in the same step, so it never showed in a later `inbox` and whole batches went missing from the middle of a
+  scan. `--ack` now clears only the batches it names (`--ack MESSAGE_ID ...`), or with none named the batches an
+  earlier `inbox` printed. Anything else is printed under `batches` as still unread, and `next` says to read it and
+  acknowledge it. The output adds `acknowledged_ids`; `batches` in an `--ack` run now lists the batches still
+  unread, not the ones just acknowledged.
+- `inbox` prints a long backlog a part at a time: at most `--limit` batches and about 20,000 characters, so an
+  agent host that cuts long tool output (Claude Code at 30,000 characters) no longer drops batches from the middle
+  of what `--ack` then clears. `remaining` says how many more wait, and batches are shown in arrival order.
+
 ## [0.3.2] - 2026-11-02
 
 - A second agent of the same owner sets up with the owner's email. The official gateway lets one email register

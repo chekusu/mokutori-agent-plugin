@@ -358,6 +358,8 @@ class Service:
             safe_batch["files"] = files
             batches.append(safe_batch)
         return {"batches": batches, "ignored_from_unpaired_senders": result.get("ignored_from_unpaired_senders", 0),
+                # Unread batches not listed this time (a long backlog is listed a part at a time).
+                "remaining": result.get("remaining", 0),
                 "acknowledged": False,
                 "ingestion_error_count": len(result.get("errors", [])),
                 "receipt": "Gateway messages are marked read after local saving; acknowledgement clears only the local unread marker.",

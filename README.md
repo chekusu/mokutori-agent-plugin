@@ -4,7 +4,7 @@ Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok
 any agent that can run a shell command. Muse connects through the included optional MCP bridge.
 No computer or desktop app is needed on the scanning side.
 
-**Current plugin version: 0.3.2**
+**Current plugin version: 0.3.3**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·
@@ -145,7 +145,8 @@ sh scripts/mokutori pair-requests                                    # requests 
 sh scripts/mokutori pair-accept PAIRING_ID                           # the owner confirmed: admit it
 sh scripts/mokutori pair-decline PAIRING_ID                          # the owner declined
 sh scripts/mokutori inbox                                            # save and show new pages
-sh scripts/mokutori inbox --ack                                      # clear local unread markers
+sh scripts/mokutori inbox --ack MESSAGE_ID ...                       # clear the unread markers of batches you read
+sh scripts/mokutori inbox --ack                                      # ... or of every batch inbox showed before
 sh scripts/mokutori devices
 sh scripts/mokutori unpair ACTOR_ID
 sh scripts/mokutori status
@@ -182,7 +183,10 @@ python3 tests/run_e2e.py /path/to/yobiru
 
 Receiving claims a job, verifies its sender and encryption binding, saves its files and a private local receipt,
 then finishes it with `outcome: read` without sending a reply. `inbox` keeps showing the saved batch until
-`inbox --ack` clears its local unread marker; acknowledgement never deletes the files. Repeated sends and
+`inbox --ack` clears its local unread marker; acknowledgement never deletes the files. `--ack` clears only the
+batches it names, or with none named the batches an earlier `inbox` printed: a batch that arrives between an
+agent's `inbox` and its `--ack` is shown in the `--ack` output and stays unread. `inbox` prints at most `--limit`
+batches (default 20) and about 20,000 characters of them, oldest first, and says how many more wait in `remaining`. Repeated sends and
 repeated inbox reads reuse the same message receipt. An interrupted saved claim resumes its own lease with
 `/start`. Yobiru 0.7.14 can mark an accepted sender's expired claim read; the plugin verifies gateway metadata
 and recovers its own authenticated local cache, including pairing proofs. Before renewing a claim, it
