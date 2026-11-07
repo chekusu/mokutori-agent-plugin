@@ -33,7 +33,7 @@ import bot_client as B  # noqa: E402
 import bot_common as C  # noqa: E402
 import bot_e2e as E  # noqa: E402
 
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 DEFAULT_GATEWAY = "https://bots.yobiru.com"
 PAIR_PREFIX = "mokutori-pair/1"
 PAIR_SCHEME = "mokutori"
@@ -977,18 +977,87 @@ def open_kept_message(get, reader, base, view, message, device):
     return opened, None
 
 
+RECOVER_SECONDS = 40
+# One conversation's history: the gateway reads every kept body (about 100 in a full conversation) from its store
+# before it answers, which can take far longer than an ordinary request's 15 seconds.
+HISTORY_TIMEOUT = 170.0
+
+
+def page_pairs(numbers):
+    """Sorted page numbers as [first, last] pairs, compact enough to keep in state.json."""
+    pairs = []
+    for number in sorted(set(numbers)):
+        if pairs and number == pairs[-1][1] + 1:
+            pairs[-1][1] = number
+        else:
+            pairs.append([number, number])
+    return pairs
+
+
+def expand_pairs(pairs):
+    return [n for first, last in pairs or [] for n in range(first, min(last, first + 1000) + 1)]
+
+
+def local_batches(state, devices):
+    """Per paired device, the batches saved here: [(page numbers, received_at)]."""
+    index = {actor: [] for actor in devices}
+    for receipt in state.get("received", {}).values():
+        batch = receipt.get("batch")
+        if batch and receipt.get("sender") in index:
+            index[receipt["sender"]].append((batch_numbers(batch.get("summary")), batch.get("received_at") or ""))
+    return index
+
+
+def gap_windows(batches):
+    """When the batches on either side of each gap in this folder's page numbers arrived: [(earliest, latest)]."""
+    ordered = sorted((min(numbers), max(numbers), at) for numbers, at in batches if numbers)
+    windows, high, before = [], None, ""
+    for low, top, at in ordered:
+        if high is not None and low > high + 1:
+            windows.append((min(before, at), max(before, at)))
+        if high is None or top > high:
+            high, before = top, at
+    return windows
+
+
+def recover_order(conversations, devices, windows):
+    """The paired devices' conversations, those that were open while a gap here opened first, then newest first.
+    A device writes into one conversation until it is full, so a conversation spans from its creation to the next
+    one's."""
+    by_actor = {}
+    for conversation in conversations:
+        if conversation.get("actor_id") in devices:
+            by_actor.setdefault(conversation["actor_id"], []).append(conversation)
+    spans = []
+    for actor, items in by_actor.items():
+        items.sort(key=lambda c: c.get("created_at") or "")
+        for index, conversation in enumerate(items):
+            until = items[index + 1].get("created_at") or "" if index + 1 < len(items) else "~"
+            since = conversation.get("created_at") or ""
+            overlaps = any(since <= latest and until >= earliest for earliest, latest in windows.get(actor, []))
+            spans.append((0 if overlaps else 1, conversation))
+    spans.sort(key=lambda item: item[1].get("created_at") or "", reverse=True)
+    spans.sort(key=lambda item: item[0])
+    return [conversation for _, conversation in spans]
+
+
 def cmd_recover(home, a):
     """Compare what each paired device sent through the gateway with what this folder holds, and save here every
     batch the gateway still keeps but this folder never got or lost: it was marked read elsewhere, by a run whose
-    files did not survive, or ended before it was read. Nothing changes at the gateway."""
+    files did not survive, or ended before it was read. Nothing changes at the gateway.
+
+    Each conversation's history is slow to fetch, so a run checks conversations for about `--seconds` (at least
+    one), starting with those that were open when a gap in this folder's page numbers opened, and keeps its place:
+    the next run continues until `remaining_conversations` is 0."""
+    started = time.monotonic()
     state = home.state()
     setup = require_setup(state)
     devices = state.get("devices", {})
     wanted = {validated_job_id(job_id) for job_id in a.message_ids or []}
     base, token = setup["gateway"], admin_token(home, setup)
 
-    def get(path):
-        return C.api_ok(base, "GET", path, None, token)[1]
+    def get(path, timeout=15.0):
+        return C.api_ok(base, "GET", path, None, token, timeout=timeout)[1]
 
     try:
         conversations = get("/v1/owner/bots/%s/conversations" % setup["bot_id"]).get("conversations") or []
@@ -996,38 +1065,34 @@ def cmd_recover(home, a):
         if error.status in (404, 405):
             raise MokutoriError("this gateway does not show its conversations to the bot's owner yet")
         raise
-    reader = B.State(home.reader)
-    received = state.setdefault("received", {})
-    report = {actor: {"actor_id": actor, "name": device.get("name"), "conversations": 0, "batches_at_gateway": 0,
-                      "received_here": 0, "missing_here": [], "restored": [], "waiting_at_gateway": [],
-                      "files_missing_here": [], "unreadable": []} for actor, device in devices.items()}
-    numbers = {actor: [] for actor in devices}
-    others, found = {}, set()
     for conversation in conversations:
-        cid, actor = conversation.get("conversation_id"), conversation.get("actor_id")
+        cid = conversation.get("conversation_id")
         if not isinstance(cid, str) or re.fullmatch(r"cnv_[a-z2-7]{16}", cid) is None:
             raise MokutoriError("gateway returned an invalid conversation id")
-        if actor not in devices:
-            if conversation.get("pending"):
-                # What `inbox` counts as ignored: messages from senders not paired here (metadata only).
-                other = others.setdefault(actor, {"actor_id": actor, "kind": conversation.get("principal_kind"),
-                                                  "handle": conversation.get("handle"),
-                                                  "display_name": conversation.get("display_name"), "waiting": []})
-                try:
-                    view = get("/v1/owner/conversations/%s" % cid)
-                except C.ApiError as error:
-                    other["error"] = error.code
-                    continue
-                other["waiting"] += [{"message_id": m.get("message_id"), "sent_at": m.get("created_at"),
-                                      "state": m.get("state"), "files": (m.get("attachments") or {}).get("count", 0)}
-                                     for m in view.get("messages") or []
-                                     if m.get("author") == "caller" and m.get("state") in GATEWAY_PENDING]
-            continue
-        view = get("/v1/owner/conversations/%s" % cid)
+    mode = "check" if a.check else "save"
+    progress = state.get("recover_progress") or {}
+    if wanted or a.restart or progress.get("mode") != mode or progress.get("complete"):
+        progress = {"mode": mode, "started_at": iso(now()), "checked": {}}
+    checked = progress["checked"]
+    windows = {actor: gap_windows(batches) for actor, batches in local_batches(state, devices).items()}
+    ordered = recover_order(conversations, devices, windows)
+    reader = B.State(home.reader)
+    received = state.setdefault("received", {})
+    found, restored_now, checked_now = set(), [], []
+
+    def done(conversation):
+        entry = checked.get(conversation["conversation_id"])
+        return entry is not None and entry.get("turns") == conversation.get("turns")
+
+    def check(conversation):
+        cid, actor = conversation["conversation_id"], conversation["actor_id"]
+        view = get("/v1/owner/conversations/%s" % cid, HISTORY_TIMEOUT)
         if view.get("conversation_id") != cid or view.get("actor_id") != actor:
             raise MokutoriError("gateway returned another conversation")
-        entry = report[actor]
-        entry["conversations"] += 1
+        entry = {"actor": actor, "turns": conversation.get("turns"), "batches": 0, "received_here": 0, "pages": [],
+                 "missing_here": [], "restored": [], "waiting_at_gateway": [], "files_missing_here": [],
+                 "unreadable": []}
+        pages_there = []
         for message in view.get("messages") or []:
             if message.get("author") != "caller":
                 continue
@@ -1042,23 +1107,25 @@ def cmd_recover(home, a):
                     "files": (message.get("attachments") or {}).get("count", 0)}
             batch = receipt.get("batch")
             if batch and job_id not in wanted:
-                entry["batches_at_gateway"] += 1
+                entry["batches"] += 1
                 entry["received_here"] += 1
-                pages = batch_numbers(batch.get("summary"))
-                numbers[actor] += pages
                 if not (home.inbox / job_id / "message.txt").is_file():
-                    entry["files_missing_here"].append({"message_id": job_id, "pages": page_runs(pages)})
+                    entry["files_missing_here"].append({"message_id": job_id,
+                                                        "pages": page_runs(batch_numbers(batch.get("summary")))})
                 continue
-            content, error = open_kept_message(get, reader, base, view, message, devices[actor])
+            if wanted and job_id not in wanted:
+                continue
+            content, error = open_kept_message(lambda path: get(path, HISTORY_TIMEOUT), reader, base, view, message,
+                                               devices[actor])
             if error:
                 entry["unreadable"].append(dict(meta, error=error))
                 continue
             text = content.get("text") or ""
             if is_pairing_control(text):
                 continue
-            entry["batches_at_gateway"] += 1
+            entry["batches"] += 1
             pages = batch_numbers(text)
-            numbers[actor] += pages
+            pages_there += pages
             meta["pages"] = page_runs(pages)
             if message.get("state") in GATEWAY_PENDING:
                 # Still unread at the gateway: `inbox` receives it as usual.
@@ -1078,39 +1145,102 @@ def cmd_recover(home, a):
             received[job_id] = restored
             home.save(state)
             entry["restored"].append(job_id)
-    for actor, entry in report.items():
-        entry["pages_seen"] = page_runs(numbers[actor])
-        entry["missing_pages"] = page_gaps(numbers[actor])
-    devices_report = list(report.values())
-    def total(key):
-        return sum(len(entry[key]) for entry in devices_report)
+            restored_now.append(job_id)
+        entry["pages"] = page_pairs(pages_there)
+        return entry
 
-    restored, missing, waiting, unreadable = (total(key) for key in ("restored", "missing_here",
-                                                                      "waiting_at_gateway", "unreadable"))
-    gaps = ["%s: pages %s" % (entry["name"], ", ".join(entry["missing_pages"]))
-            for entry in devices_report if entry["missing_pages"]]
+    for conversation in ordered:
+        if wanted and wanted <= found:
+            break
+        if done(conversation) and not wanted:
+            continue
+        if checked_now and time.monotonic() - started > a.seconds:
+            break
+        began = time.monotonic()
+        checked[conversation["conversation_id"]] = check(conversation)
+        checked_now.append({"conversation_id": conversation["conversation_id"],
+                            "device": devices[conversation["actor_id"]].get("name"),
+                            "created_at": conversation.get("created_at"), "turns": conversation.get("turns"),
+                            "seconds": round(time.monotonic() - began, 1)})
+        if not wanted:
+            state["recover_progress"] = progress
+            home.save(state)
+    remaining = [c for c in ordered if not done(c)] if not wanted else []
+    complete = not remaining
+    others = []
+    if complete and not wanted:
+        progress["complete"] = True
+        state["recover_progress"] = progress
+        home.save(state)
+        # What `inbox` counts as ignored: messages from senders not paired here (metadata only, small).
+        senders = {}
+        for conversation in conversations:
+            actor = conversation.get("actor_id")
+            if actor in devices or not conversation.get("pending"):
+                continue
+            other = senders.setdefault(actor, {"actor_id": actor, "kind": conversation.get("principal_kind"),
+                                               "handle": conversation.get("handle"),
+                                               "display_name": conversation.get("display_name"), "waiting": []})
+            try:
+                view = get("/v1/owner/conversations/%s" % conversation["conversation_id"], HISTORY_TIMEOUT)
+            except C.ApiError as error:
+                other["error"] = error.code
+                continue
+            other["waiting"] += [{"message_id": m.get("message_id"), "sent_at": m.get("created_at"),
+                                  "state": m.get("state"), "files": (m.get("attachments") or {}).get("count", 0)}
+                                 for m in view.get("messages") or []
+                                 if m.get("author") == "caller" and m.get("state") in GATEWAY_PENDING]
+        others = list(senders.values())
+    here = local_batches(state, devices)
+    report = []
+    for actor, device in devices.items():
+        listing = [c for c in conversations if c.get("actor_id") == actor]
+        entries = [checked[c["conversation_id"]] for c in listing if c["conversation_id"] in checked]
+        local = [n for numbers, _ in here[actor] for n in numbers]
+        item = {"actor_id": actor, "name": device.get("name"),
+                "conversations": len(listing), "conversations_checked": sum(1 for c in listing if done(c)),
+                "turns_at_gateway": sum(c.get("turns") or 0 for c in listing),
+                "batches_here": len(here[actor]), "gaps_here": page_gaps(local)}
+        for key in ("batches", "received_here"):
+            item[key if key != "batches" else "batches_checked"] = sum(entry[key] for entry in entries)
+        for key in ("missing_here", "restored", "waiting_at_gateway", "files_missing_here", "unreadable"):
+            item[key] = [x for entry in entries for x in entry[key]]
+        if item["conversations_checked"] == item["conversations"] and not wanted:
+            # Pages no batch carries, at the gateway (saved here now, waiting, or only checked) or here.
+            there = [n for entry in entries for n in expand_pairs(entry.get("pages"))]
+            item["missing_pages"] = page_gaps(local + there)
+        report.append(item)
     notes = []
-    if restored:
-        notes.append("Restored %d batches the gateway still kept; run `inbox` to read them." % restored)
-    elif missing:
+    if restored_now:
+        notes.append("Restored %d batches the gateway still kept; run `inbox` to read them." % len(restored_now))
+    if remaining:
+        notes.append("Checked %d conversations in this run; %d more remain. Run `recover%s` again until "
+                     "remaining_conversations is 0." % (len(checked_now), len(remaining), " --check" if a.check else ""))
+    missing = sum(len(item["missing_here"]) for item in report)
+    if a.check and missing:
         notes.append("%d batches are kept at the gateway but missing here; run `recover` without --check to save "
                      "them." % missing)
-    elif not waiting and not unreadable:
-        notes.append("Every batch the gateway keeps from the paired devices is here.")
+    waiting = sum(len(item["waiting_at_gateway"]) for item in report)
     if waiting:
         notes.append("%d batches still wait at the gateway; `inbox` receives them." % waiting)
+    unreadable = sum(len(item["unreadable"]) for item in report)
     if unreadable:
         notes.append("%d messages at the gateway could not be opened here; see `unreadable`." % unreadable)
-    if gaps:
-        notes.append("No batch kept at the gateway or saved here carries %s. The app did not deliver them to this "
-                     "bot, or longer ago than the gateway keeps messages (30 days by default); ask the owner to send "
-                     "those scans again from the app." % "; ".join(gaps))
-    if others:
-        notes.append("other_senders_waiting are not paired here, so `inbox` ignores them; a pairing request carries "
-                     "0 files.")
-    out({"ok": True, "checked_only": bool(a.check), "devices": devices_report,
-         "other_senders_waiting": list(others.values()),
-         "not_found": sorted(wanted - found), "restored": restored, "next": " ".join(notes)})
+    gaps = ["%s: pages %s" % (item["name"], ", ".join(item["missing_pages"]))
+            for item in report if item.get("missing_pages")]
+    if complete and not wanted:
+        if gaps:
+            notes.append("No batch kept at the gateway or saved here carries %s. The app did not deliver them to "
+                         "this bot, or longer ago than the gateway keeps messages (30 days by default); ask the owner "
+                         "to send those scans again from the app." % "; ".join(gaps))
+        elif not missing and not waiting and not unreadable:
+            notes.append("Every batch the gateway keeps from the paired devices is here.")
+        if others:
+            notes.append("other_senders_waiting are not paired here, so `inbox` ignores them; a pairing request "
+                         "carries 0 files.")
+    out({"ok": True, "checked_only": bool(a.check), "checked_now": checked_now,
+         "remaining_conversations": len(remaining), "devices": report, "other_senders_waiting": others,
+         "not_found": sorted(wanted - found), "restored": len(restored_now), "next": " ".join(notes)})
 
 
 def cmd_inbox(home, a):
@@ -1271,7 +1401,11 @@ def main(argv=None):
                                        "save here batches the gateway still keeps but this folder never got or lost")
     p.add_argument("message_ids", nargs="*", metavar="MESSAGE_ID",
                    help="save these batches again from the gateway's copy, even if they were received before")
-    p.add_argument("--check", action="store_true", help="only report; save nothing")
+    p.add_argument("--check", action="store_true", help="only report; save no batches")
+    p.add_argument("--seconds", type=int, default=RECOVER_SECONDS, choices=range(0, 601), metavar="0-600",
+                   help="check conversations for about this long, then stop and keep the place (default %d)"
+                        % RECOVER_SECONDS)
+    p.add_argument("--restart", action="store_true", help="check every conversation again from the start")
     a = parser.parse_args(argv)
     home = Home(a.home or default_home())
     handlers = {"setup": cmd_setup, "status": cmd_status, "rename": cmd_rename, "pair": cmd_pair, "pair-check": cmd_pair_check,
