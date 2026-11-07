@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-07
+
+- New `recover` command for pages the owner sent that the agent does not have. It compares what each paired
+  device sent through the gateway (the owner's view of its conversations, read-only) with the data folder, and
+  saves every batch the gateway still keeps (30 days by default) but the folder never got or lost, as an unread
+  batch for `inbox`. This covers batches marked read by another run or host whose files did not survive, batches
+  that ended at the gateway before they were read, and deleted files. Each batch is opened with the bot's key and
+  verified as `inbox` verifies a job; nothing changes at the gateway. Per device it reports `missing_here`,
+  `waiting_at_gateway`, `files_missing_here`, `unreadable` and `missing_pages`: page numbers no batch at the
+  gateway or here carries, which the app never delivered. `other_senders_waiting` shows who sent the messages
+  `inbox` ignores as unpaired, when, and with how many files. `--check` only reports; `recover MESSAGE_ID ...`
+  saves named batches again.
+- `inbox` adds `ignored_note` when it ignores messages from unpaired senders, pointing to `recover --check`.
+
 ## [0.3.3] - 2026-11-06
 
 - `inbox --ack` no longer acknowledges batches the agent has not seen. With pages sent continuously, the next

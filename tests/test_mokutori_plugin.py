@@ -10,6 +10,7 @@ from contextlib import closing
 import hashlib
 import importlib.util
 import os
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -635,6 +636,83 @@ class PluginFlow(unittest.TestCase):
         self.assertEqual([batch["message_id"] for batch in acked["batches"]], sent[2:])
         self.assertEqual(acked["remaining"], 0)
 
+    def send_pages(self, ipad, *numbers):
+        _, attachments, text = app.pack([page for number in numbers for page in self.pages(1, start=number)])
+        status, receipt = ipad.message(text, attachments)
+        self.assertEqual(status, 202, receipt)
+        return receipt["message_id"]
+
+    def lose_locally(self, *message_ids):
+        """What a host that lost files does to this folder: these batches' receipts and folders are gone."""
+        home = plugin.Home(self.home)
+        state = home.state()
+        for job_id in message_ids:
+            del state["received"][job_id]
+            shutil.rmtree(str(home.inbox / job_id))
+        home.save(state)
+
+    def test_recover_restores_batches_marked_read_whose_files_were_lost(self):
+        _, ipad, _ = self.paired_device()
+        sent = [self.send_pages(ipad, number) for number in (1, 2, 3)]
+        self.mokutori("inbox", "--ack", *[batch["message_id"] for batch in self.mokutori("inbox")["batches"]])
+        self.lose_locally(*sent[1:])
+        self.assertEqual(self.mokutori("inbox")["batches"], [])
+        checked = self.mokutori("recover", "--check")
+        device = checked["devices"][0]
+        self.assertEqual([item["message_id"] for item in device["missing_here"]], sent[1:], checked)
+        self.assertEqual([item["pages"] for item in device["missing_here"]], [["2"], ["3"]])
+        self.assertEqual({item["gateway_state"] for item in device["missing_here"]}, {"completed"})
+        self.assertEqual((device["batches_at_gateway"], device["received_here"], device["restored"]), (3, 1, []))
+        self.assertEqual((device["pages_seen"], device["missing_pages"]), (["1–3"], []))
+        self.assertFalse((plugin.Home(self.home).inbox / sent[1]).exists())
+        self.assertIn("without --check", checked["next"])
+        restored = self.mokutori("recover")
+        self.assertEqual((restored["restored"], restored["devices"][0]["restored"]), (2, sent[1:]), restored)
+        inbox = self.mokutori("inbox")
+        self.assertEqual([batch["message_id"] for batch in inbox["batches"]], sent[1:], inbox)
+        self.assertTrue(inbox["batches"][0]["summary"].startswith("Mokutori 扫描 · 第 2–2 页"))
+        self.assertIn("第 2 页 領収書", inbox["batches"][0]["ocr_markdown"])
+        for batch in inbox["batches"]:
+            for item in batch["files"]:
+                self.assertTrue(Path(item["path"]).is_file(), item)
+        self.mokutori("inbox", "--ack", *sent[1:])
+        again = self.mokutori("recover")
+        self.assertEqual((again["restored"], again["devices"][0]["received_here"]), (0, 3), again)
+        self.assertIn("Every batch", again["next"])
+        # A named batch is saved again from the gateway's copy and shown as unread, even if it was received.
+        named = self.mokutori("recover", sent[0], "msg_aaaaaaaaaaaaaaaa")
+        self.assertEqual((named["devices"][0]["restored"], named["not_found"]), ([sent[0]], ["msg_aaaaaaaaaaaaaaaa"]))
+        self.assertEqual([batch["message_id"] for batch in self.mokutori("inbox")["batches"]], [sent[0]])
+
+    def test_recover_names_pages_no_batch_carries_and_leaves_unread_ones_to_inbox(self):
+        _, ipad, _ = self.paired_device()
+        first = self.send_pages(ipad, 1, 2)
+        self.assertEqual(len(self.mokutori("inbox")["batches"]), 1)
+        late = self.send_pages(ipad, 6)
+        report = self.mokutori("recover")
+        device = report["devices"][0]
+        self.assertEqual([item["message_id"] for item in device["waiting_at_gateway"]], [late], report)
+        self.assertEqual(device["waiting_at_gateway"][0]["pages"], ["6"])
+        self.assertEqual((device["pages_seen"], device["missing_pages"]), (["1–2", "6"], ["3–5"]))
+        self.assertEqual(report["restored"], 0)
+        self.assertIn("pages 3–5", report["next"])
+        self.assertEqual([batch["message_id"] for batch in self.mokutori("inbox")["batches"]], [first, late])
+
+    def test_recover_shows_unpaired_senders_that_inbox_ignores(self):
+        self.paired_device()
+        stranger = app.App()
+        status, _ = stranger.pair(self.mokutori("pair")["pair_url"], device_name="Someone else")
+        self.assertEqual(status, 202)
+        inbox = self.mokutori("inbox")
+        self.assertEqual(inbox["ignored_from_unpaired_senders"], 1, inbox)
+        self.assertIn("recover --check", inbox["ignored_note"])
+        report = self.mokutori("recover", "--check")
+        self.assertEqual(len(report["other_senders_waiting"]), 1, report)
+        waiting = report["other_senders_waiting"][0]
+        self.assertEqual(waiting["actor_id"], stranger.state["actor_id"])
+        self.assertEqual([(item["state"], item["files"]) for item in waiting["waiting"]], [("queued", 0)])
+        self.assertIn("pairing request", report["next"])
+
     def test_pairing_rejects_other_prefix_and_wrong_prefix_mac(self):
         self.setup_agent()
         pairing = self.mokutori("pair")
@@ -740,6 +818,23 @@ class InboxOutput(unittest.TestCase):
             batches, remaining = plugin.unread_batches(plugin.Home(folder), {"received": self.receipts(2, 30000)}, 20)
             self.assertEqual((len(batches), remaining), (1, 1))
 
+
+
+class RecoverReport(unittest.TestCase):
+    def test_pages_a_batch_accounts_for(self):
+        text = "Mokutori 扫描 · 第 7–9 页\n第 7 页：ready\n第 9 页：needs_review（lowContrast）\n第 8 页与第 9 页内容几乎相同，未重复发送。"
+        self.assertEqual(sorted(plugin.batch_numbers(text)), [7, 8, 9])
+        self.assertEqual(plugin.batch_numbers("Mokutori 扫描 · 第 3–4 页\n（截断）"), [3, 4])
+        # Re-queued pages can be out of order; the per-page lines still name each one.
+        self.assertEqual(plugin.batch_numbers("Mokutori 扫描 · 第 12–10 页\n第 12 页：ready\n第 10 页：ready"), [12, 10])
+        self.assertEqual(plugin.batch_numbers("Mokutori 扫描 · 第 1–999999999 页"), [])
+        self.assertEqual(plugin.batch_numbers("hello"), [])
+
+    def test_runs_and_gaps(self):
+        self.assertEqual(plugin.page_runs([3, 1, 2, 7, 7, 9, 10]), ["1–3", "7", "9–10"])
+        self.assertEqual(plugin.page_gaps(list(range(1, 113)) + [126, 127]), ["113–125"])
+        self.assertEqual(plugin.page_gaps([1, 3, 999999999]), ["2", "4–999999998"])
+        self.assertEqual(plugin.page_gaps([]), [])
 
 if __name__ == "__main__":
     unittest.main()

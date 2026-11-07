@@ -139,6 +139,19 @@ owner confirmed and lists new `pair_requests`; ask the owner about those as abov
 If `errors` reports an uncertain claim or unconfirmed finish, report it and preserve its state; do not reset
 the data folder, reclaim the job or repeat a send to force success.
 
+## Pages the owner sent but you do not have
+
+When the owner says pages are missing (for example the page numbers jump from 112 to 126), run
+`sh M recover --check`. It compares what each paired iPad sent through the gateway with this data folder and
+prints, per device: `missing_here` (batches the gateway still keeps but this folder never got or lost, with
+their page numbers and gateway state), `waiting_at_gateway` (not read yet; `inbox` receives them),
+`missing_pages` (page numbers no batch at the gateway or here carries) and `unreadable`. Then run
+`sh M recover` to save the missing batches here, and `sh M inbox` to read them as usual. Pages listed in
+`missing_pages` never reached this bot (or longer ago than the gateway keeps messages, 30 days by default):
+tell the owner which pages, so they can send those scans again from the app. `other_senders_waiting` shows the
+messages `inbox` ignores because their sender is not paired here; a pairing request carries 0 files.
+`recover` changes nothing at the gateway and never sends anything.
+
 While the owner is scanning, check the inbox every minute or two, or set up your host's scheduled task
 (for example a Grok Bot routine) to run `sh M inbox` and tell you when pages arrived. Nothing wakes you
 automatically.

@@ -4,7 +4,7 @@ Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok
 any agent that can run a shell command. Muse connects through the included optional MCP bridge.
 No computer or desktop app is needed on the scanning side.
 
-**Current plugin version: 0.3.3**
+**Current plugin version: 0.3.4**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·
@@ -147,6 +147,8 @@ sh scripts/mokutori pair-decline PAIRING_ID                          # the owner
 sh scripts/mokutori inbox                                            # save and show new pages
 sh scripts/mokutori inbox --ack MESSAGE_ID ...                       # clear the unread markers of batches you read
 sh scripts/mokutori inbox --ack                                      # ... or of every batch inbox showed before
+sh scripts/mokutori recover --check                                  # what the iPads sent vs. what is here
+sh scripts/mokutori recover                                          # save batches the gateway kept but this folder lacks
 sh scripts/mokutori devices
 sh scripts/mokutori unpair ACTOR_ID
 sh scripts/mokutori status
@@ -195,6 +197,13 @@ the lease expires between listing and renewal. The snapshot is removed only afte
 an owner-only retry command. They are retried only after that explicit resolution, with the same message
 and files checked again. Existing local acknowledgement is retained in that same atomic receipt update. A lost finish response is reconciled against gateway metadata. Disconnecting a device blocks future sends and stops new receipts from
 that device; previously saved pages remain available.
+
+`recover` reads the owner's view of each paired device's conversations at the gateway (read-only), opens the
+batches this folder does not hold with the bot's key, verifies them as `inbox` verifies a job, and saves them as
+unread batches. It covers a batch that was marked read by another run or host whose files did not survive, one
+that ended at the gateway before it was read, and files lost here. `recover MESSAGE_ID ...` saves named batches
+again. It also lists the page numbers no batch carries (pages the app never delivered) and the messages `inbox`
+ignores because their sender is not paired.
 
 Limits: an agent learns about new pages only when it runs `inbox` (or a scheduled task does); waking an
 idle hosted agent is not automatic. The official gateway stores sealed messages for up to 30 days.
