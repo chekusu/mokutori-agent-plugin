@@ -4,7 +4,7 @@ Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok
 any agent that can run a shell command. Muse connects through the included optional MCP bridge.
 No computer or desktop app is needed on the scanning side.
 
-**Current plugin version: 0.3.5**
+**Current plugin version: 0.3.6**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·
@@ -190,7 +190,7 @@ batches it names, or with none named the batches an earlier `inbox` printed: a b
 agent's `inbox` and its `--ack` is shown in the `--ack` output and stays unread. `inbox` prints at most `--limit`
 batches (default 20) and about 20,000 characters of them, oldest first, and says how many more wait in `remaining`. Repeated sends and
 repeated inbox reads reuse the same message receipt. An interrupted saved claim resumes its own lease with
-`/start`. Yobiru 0.7.14 can mark an accepted sender's expired claim read; the plugin verifies gateway metadata
+`/start`. The gateway builds each claimed job's conversation transcript from every earlier message, which can take long in a long scan, so a claim waits up to 170 seconds; when its answer is still lost, `inbox` saves that batch from the gateway's copy of the message (owner credential, same checks) and lets the gateway's claim run out. `inbox` claims for about 90 seconds per run and reports what still waits in `waiting_at_gateway`. Yobiru 0.7.14 can mark an accepted sender's expired claim read; the plugin verifies gateway metadata
 and recovers its own authenticated local cache, including pairing proofs. Before renewing a claim, it
 saves an independent private encrypted snapshot so the official client cannot delete the only copy when
 the lease expires between listing and renewal. The snapshot is removed only after the local receipt is saved. Truly uncertain claims include

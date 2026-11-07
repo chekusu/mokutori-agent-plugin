@@ -4,6 +4,9 @@ The gateway comes from a Yobiru source checkout ($YOBIRU_SOURCE, default ../yobi
 /home/user/chekusu/yobiru); the test is skipped without one. The iPad side is the Python reference of the app
 protocol in tests/app_protocol_reference.py.
 """
+import argparse
+import contextlib
+import io
 import json
 import base64
 from contextlib import closing
@@ -729,6 +732,78 @@ class PluginFlow(unittest.TestCase):
         # The pass is complete: the next run starts again from the beginning and finds nothing missing.
         again = self.mokutori("recover")
         self.assertEqual((len(again["checked_now"]), again["restored"], again["remaining_conversations"]), (4, 0, 0))
+
+    def in_process(self, *args):
+        """Run the plugin in this process, so a test can stand in for a slow network."""
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit):
+            plugin.main(["--home", str(self.home)] + list(args))
+        return json.loads(stdout.getvalue())
+
+    def claim_without_answer(self, job_id, lease_seconds=600):
+        """What a claim whose answer never arrived leaves: the job started at the gateway, no claim here."""
+        home = plugin.Home(self.home)
+        setup = home.state()["setup"]
+        base, _, token = plugin.in_engine(plugin.B.worker_session, plugin.B.State(home.reader),
+                                          argparse.Namespace(gateway=setup["gateway"], bot=setup["bot_id"]))
+        status, result = app.call(base, "POST", "/v1/worker/messages/%s/claim" % job_id,
+                                  {"lease_seconds": lease_seconds}, token)
+        self.assertEqual(status, 200, result)
+
+    def test_a_claim_whose_answer_is_lost_is_saved_from_the_gateway_copy(self):
+        # Late in a long conversation the gateway took longer than the client waited to answer a claim. It kept
+        # the lease, the client had nothing, and ten minutes later the gateway marked the batch read.
+        _, ipad, _ = self.paired_device()
+        sent = self.send_pages(ipad, 7)
+        real = plugin.B.request
+
+        def answer_lost(base, method, path, body, token, timeout=15.0):
+            result = real(base, method, path, body, token, timeout=timeout)
+            if path.endswith("/claim"):
+                self.assertEqual(timeout, plugin.CLAIM_TIMEOUT)
+                return {"ok": False, "error": "unreachable", "detail": "TimeoutError (deadline)", "http_status": None}
+            return result
+
+        with mock.patch.object(plugin.B, "request", answer_lost):
+            result = self.in_process("inbox")
+        self.assertEqual(result["errors"], [], result)
+        self.assertEqual([batch["message_id"] for batch in result["batches"]], [sent])
+        self.assertTrue(result["batches"][0]["summary"].startswith("Mokutori 扫描 · 第 7–7 页"))
+        for item in result["batches"][0]["files"]:
+            self.assertTrue(Path(item["path"]).is_file(), item)
+        receipt = plugin.Home(self.home).state()["received"][sent]
+        self.assertEqual((receipt.get("lease_lost"), receipt["remote_finished"]), (True, False))
+        self.assertEqual(self.status_of(ipad, sent)["state"], "started")
+        # Later runs neither fail on the claim the gateway still holds nor save the batch again.
+        again = self.mokutori("inbox")
+        self.assertEqual((again["errors"], [batch["message_id"] for batch in again["batches"]]), ([], [sent]))
+
+    def test_a_job_started_without_a_claim_here_no_longer_stops_inbox(self):
+        _, ipad, _ = self.paired_device()
+        stuck, later = self.send_pages(ipad, 1), self.send_pages(ipad, 2)
+        self.claim_without_answer(stuck, lease_seconds=30)
+        result = self.mokutori("inbox")
+        self.assertEqual(result["errors"], [], result)
+        self.assertEqual([batch["message_id"] for batch in result["batches"]], [stuck, later])
+        self.assertEqual(self.status_of(ipad, later)["state"], "completed")
+        # When the lost claim's lease runs out, the gateway marks it read and the receipt notes that.
+        time.sleep(31)
+        for _ in range(2):
+            self.assertEqual(self.mokutori("inbox")["errors"], [])
+        self.assertTrue(plugin.Home(self.home).state()["received"][stuck]["remote_finished"])
+        self.assertEqual(self.status_of(ipad, stuck)["state"], "completed")
+        self.assertEqual(self.mokutori("recover", "--check")["devices"][0]["missing_here"], [])
+
+    def test_inbox_stops_claiming_after_its_time_and_says_what_waits(self):
+        _, ipad, _ = self.paired_device()
+        sent = [self.send_pages(ipad, number) for number in (1, 2, 3)]
+        with mock.patch.object(plugin, "INBOX_SECONDS", 0):
+            first = self.in_process("inbox")
+        self.assertEqual(([batch["message_id"] for batch in first["batches"]], first["waiting_at_gateway"]),
+                         (sent[:1], 2), first)
+        self.assertIn("run `inbox` again", first["next"])
+        rest = self.mokutori("inbox")
+        self.assertEqual(([batch["message_id"] for batch in rest["batches"]], rest["waiting_at_gateway"]), (sent, 0))
 
     def test_recover_shows_unpaired_senders_that_inbox_ignores(self):
         self.paired_device()

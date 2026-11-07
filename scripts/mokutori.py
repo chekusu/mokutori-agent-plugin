@@ -10,6 +10,8 @@ Python 3.8+, standard library only. Output is JSON on stdout.
 """
 import argparse
 import base64
+import contextlib
+import io
 import datetime as dt
 import hashlib
 import hmac
@@ -33,7 +35,7 @@ import bot_client as B  # noqa: E402
 import bot_common as C  # noqa: E402
 import bot_e2e as E  # noqa: E402
 
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 DEFAULT_GATEWAY = "https://bots.yobiru.com"
 PAIR_PREFIX = "mokutori-pair/1"
 PAIR_SCHEME = "mokutori"
@@ -76,6 +78,10 @@ class MokutoriError(Exception):
     def __init__(self, message, recovery=None):
         super().__init__(message)
         self.recovery = recovery
+
+
+class LostClaim(MokutoriError):
+    """A claim whose answer never arrived: the gateway may hold its lease although this client has none."""
 
 
 def out(obj, code=0):
@@ -724,7 +730,9 @@ def claim_snapshot(home, setup, job_id, reader, lease=None):
             raise MokutoriError("cached claim belongs to another gateway or bot")
         return saved["job"]
     if lease is None:
-        lease = B.lease_of(reader, job_id, setup["bot_id"])
+        lease = reader.load("leases.json")["leases"].get(job_id)
+        if lease is None or lease.get("bot_id") != setup["bot_id"]:
+            raise MokutoriError("no local claim for %s" % job_id)
     job = B.cached_job(reader, job_id, lease)
     C.write_private_json(path, {"gateway": setup["gateway"], "bot_id": setup["bot_id"], "job": job})
     return job
@@ -777,6 +785,91 @@ def save_batch(folder, job_id, device, text, attachments, received_at):
             "ocr_markdown": "\n\n".join(markdown), "files": files, "folder": str(folder)}
 
 
+# A claimed job carries a transcript of its conversation, and the gateway reads every earlier message of the
+# conversation to build it: late in a long conversation of page batches a claim took more than the engine's 15
+# seconds. The gateway kept the lease the client never saw and marked the job read when it expired, so the batch
+# was gone. Claims get this long instead, and a claim whose answer is lost is received from the gateway's copy.
+CLAIM_TIMEOUT = 170.0
+CLAIM_LEASE_SECONDS = 600
+# `inbox` stops claiming after this long and says how many jobs still wait; a host that cuts a long command
+# then loses nothing it already saved.
+INBOX_SECONDS = 90
+
+
+def in_engine(function, *args, **kwargs):
+    """Call a bundled engine function in this process: its fatal errors (it prints them and exits) become a
+    MokutoriError, so one job never ends the whole run."""
+    errors = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(errors):
+            return function(*args, **kwargs)
+    except SystemExit:
+        raise MokutoriError(errors.getvalue().strip().replace("yobiru public: error: ", "")[-300:] or "engine error")
+
+
+def claim_job(home, setup, job_id):
+    """Claim one job exactly as the engine's `job claim` saves it (the engine then finishes it), with time for a
+    slow gateway. Raises LostClaim when no answer arrived: the gateway may have started the job anyway."""
+    reader = B.State(home.reader)
+    base, bot_id, token = in_engine(B.worker_session, reader, argparse.Namespace(gateway=setup["gateway"],
+                                                                                 bot=setup["bot_id"]))
+    in_engine(B.colocated_owner, reader, base, argparse.Namespace())
+    res = in_engine(B.request, base, "POST", "/v1/worker/messages/%s/claim" % validated_job_id(job_id),
+                    {"lease_seconds": CLAIM_LEASE_SECONDS}, token, timeout=CLAIM_TIMEOUT)
+    if res.get("ok"):
+        in_engine(B.save_lease, reader, job_id, {
+            "gateway": base, "bot_id": bot_id, "lease_id": res["lease"]["lease_id"], "fence": res["lease"]["fence"],
+            "state": "started", "native": True, "ticket": res.get("capability_ticket"),
+            "job": B.stash_job_files(reader, job_id, B.redact_job(res))})
+        return
+    if res.get("http_status") is None:
+        raise LostClaim("claim of %s got no answer (%s)" % (job_id, res.get("detail") or res.get("error")))
+    raise MokutoriError("claim: %s" % (res.get("detail") or res.get("error")))
+
+
+def has_local_claim(home, reader, job_id):
+    return (home.claims / (job_id + ".json")).exists() or job_id in reader.load("leases.json")["leases"]
+
+
+def receive_owner_copy(home, state, setup, summary, device):
+    """Save a job whose claim answer was lost from the gateway's own copy (one message body, read with the owner
+    credential), checked as a claimed job is. The gateway still holds that claim; it marks the job read when the
+    lease runs out, and `inbox` notes it then."""
+    job_id, cid = summary["job_id"], summary.get("conversation_id")
+    sender = summary["from"]["principal_id"]
+    if not isinstance(cid, str) or re.fullmatch(r"cnv_[a-z2-7]{16}", cid) is None:
+        raise MokutoriError("gateway listed %s without its conversation" % job_id)
+    base, token = setup["gateway"], admin_token(home, setup)
+
+    def get(path):
+        return C.api_ok(base, "GET", path, None, token, timeout=HISTORY_TIMEOUT)[1]
+
+    body = get("/v1/owner/conversations/%s/messages/%s/content" % (cid, job_id))
+    if body.get("conversation_id") != cid or body.get("message_id") != job_id or body.get("actor_id") != sender:
+        raise MokutoriError("gateway returned another message's body for %s" % job_id)
+    view = {"conversation_id": cid, "bot_id": body.get("bot_id"), "actor_id": sender,
+            "actor_e2e_key": body.get("actor_e2e_key")}
+    content, error = open_kept_message(get, B.State(home.reader), base, view,
+                                       {"message_id": job_id, "content": body.get("content")}, device)
+    if error:
+        raise MokutoriError("the gateway's copy of %s %s" % (job_id, error))
+    text = content.get("text") or ""
+    previous = state.get("received", {}).get(job_id, {})
+    receipt = {"sender": sender, "remote_finished": False, "lease_lost": True,
+               "acknowledged": previous.get("acknowledged", False)}
+    if previous.get("seq"):
+        receipt["seq"] = previous["seq"]
+    else:
+        state["receipt_seq"] = receipt["seq"] = state.get("receipt_seq", 0) + 1
+    if is_pairing_control(text):
+        receipt.update(ignored="pairing_control", acknowledged=True)
+    else:
+        receipt["batch"] = save_batch(home.inbox / job_id, job_id, device, text, content.get("attachments"),
+                                      summary.get("created_at"))
+    state.setdefault("received", {})[job_id] = receipt
+    home.save(state)
+
+
 def receive_job(home, state, setup, summary, pairing_id=None, cached_finished=False):
     job_id = validated_job_id(summary.get("job_id"))
     folder = home.inbox / job_id
@@ -791,9 +884,17 @@ def receive_job(home, state, setup, summary, pairing_id=None, cached_finished=Fa
     if cached_finished:
         cached = claim_snapshot(home, setup, job_id, reader)
     elif summary.get("claimable"):
-        reader_job(home, setup, "claim", job_id, "--lease-seconds", "600")
+        try:
+            claim_job(home, setup, job_id)
+        except LostClaim:
+            if pairing_id:
+                raise
+            return receive_owner_copy(home, state, setup, summary, device)
         cached = claim_snapshot(home, setup, job_id, reader)
     elif summary.get("state") == "started":
+        if not pairing_id and not has_local_claim(home, reader, job_id):
+            # Started at the gateway by a claim whose answer never arrived here.
+            return receive_owner_copy(home, state, setup, summary, device)
         # Resume only our saved lease; never reclaim or resolve another process's uncertain work.
         cached = claim_snapshot(home, setup, job_id, reader)
         heartbeat = reader_job(home, setup, "heartbeat", job_id, "--lease-seconds", "600", check=False)
@@ -856,6 +957,27 @@ def owner_job_context(home, setup, job_id):
 def finish_received(home, state, setup, job_id, recover_resolved=True):
     receipt = state["received"][job_id]
     if receipt.get("remote_finished"):
+        return
+    if receipt.get("lease_lost"):
+        # Saved from the gateway's copy. Its lost claim ends at the gateway: an expired claim from a paired
+        # device is marked read; a job the owner put back in the queue is claimed and marked read now.
+        context = owner_job_context(home, setup, job_id)
+        if context.get("actor_id") != receipt["sender"]:
+            raise MokutoriError("job %s belongs to another sender at the gateway" % job_id)
+        if context.get("state") == "queued":
+            try:
+                claim_job(home, setup, job_id)
+            except LostClaim:
+                return
+            if not reader_job(home, setup, "read", job_id, check=False).get("ok"):
+                return
+        elif context.get("state") in ("started", "claimed"):
+            return
+        elif context.get("state") == "uncertain":
+            raise MokutoriError("job %s is uncertain at the gateway; its pages are saved here" % job_id,
+                                recovery=owner_recovery(home, setup, job_id))
+        receipt["remote_finished"] = True
+        home.save(state)
         return
     result = reader_job(home, setup, "read", job_id, check=False)
     if not result.get("ok"):
@@ -1255,6 +1377,7 @@ def cmd_inbox(home, a):
             except MokutoriError as error:
                 errors.append(job_error(job_id, error))
     jobs = reader_job(home, setup, "list")
+    started, waiting, tried = time.monotonic(), 0, 0
     for summary in jobs.get("jobs", []):
         sender = (summary.get("from") or {}).get("principal_id")
         job_id = validated_job_id(summary.get("job_id"))
@@ -1263,11 +1386,15 @@ def cmd_inbox(home, a):
             continue
         if job_id in state.get("received", {}):
             continue
+        if tried and time.monotonic() - started > INBOX_SECONDS:
+            waiting += 1
+            continue
         if not summary.get("claimable") and summary.get("state") != "started":
             error = MokutoriError("job is %s; no automatic replay" % summary.get("state"),
                                  recovery=owner_recovery(home, setup, job_id) if summary.get("state") == "uncertain" else None)
             errors.append(job_error(job_id, error))
             continue
+        tried += 1
         try:
             receive_job(home, state, setup, summary)
             finish_received(home, state, setup, job_id)
@@ -1281,6 +1408,8 @@ def cmd_inbox(home, a):
                 % (len(batches), " ".join(batch["message_id"] for batch in batches)))
         if remaining:
             step += "; %d more wait after them and are shown then" % remaining
+        if waiting:
+            step += "; %d more batches wait at the gateway, run `inbox` again to receive them" % waiting
         if a.ack is not None:
             step = "Not acknowledged: these batches were not shown before (or not named). " + step
     out({"ok": True, "paired_now": paired, "pair_requests": requests,
@@ -1294,7 +1423,9 @@ def cmd_inbox(home, a):
          "receipt": "This client marks jobs read after saving locally. Expired claims may be marked read by the "
                     "gateway; their local cache is recovered. --ack clears the local unread marker only for batches "
                     "an earlier inbox showed (or the message ids given), never for one that just arrived.",
-         "next": step + "." if batches else None})
+         "waiting_at_gateway": waiting,
+         "next": step + "." if batches else ("%d batches wait at the gateway; run `inbox` again to receive them."
+                                              % waiting if waiting else None)})
 
 
 def acknowledge(home, state, message_ids):
