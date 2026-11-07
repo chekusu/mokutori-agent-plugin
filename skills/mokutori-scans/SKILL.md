@@ -132,7 +132,7 @@ command) so they leave the local unread list; saved files remain. `--ack` alone 
 earlier `inbox` printed. Pages often keep arriving while you read: a batch that arrived after your last `inbox`
 is never acknowledged; the `--ack` output lists it under `batches`, so read the `--ack` output too and repeat
 until `batches` is empty. A long backlog is printed a part at a time (`remaining` says how many wait), so keep
-going until `remaining` is 0. This client marks a gateway job read after its files and local receipt are saved;
+going until `remaining` is 0. Each run receives for about 90 seconds; when `waiting_at_gateway` is above 0, run `sh M inbox` again. This client marks a gateway job read after its files and local receipt are saved;
 this sends no reply. The gateway can also mark expired claims
 read, in which case the plugin recovers its authenticated local cache. `inbox` also finishes pairings the
 owner confirmed and lists new `pair_requests`; ask the owner about those as above.

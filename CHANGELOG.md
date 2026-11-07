@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-07
+
+- Batches no longer go missing late in a long scan. A claimed job carries a transcript of its conversation, and
+  the gateway reads every earlier message of the conversation to build it, so late in a long conversation of page
+  batches a claim took longer than the engine's 15-second request limit. The client gave up while the gateway had
+  already started the job; ten minutes later the expired claim was marked read and the batch never reached this
+  folder (pages 113–125 in one scan, found by `recover`). Claims now wait up to 170 seconds, and a claim whose
+  answer is lost is received at once from the gateway's own copy of that message (read with the owner
+  credential, checked as a claimed job is). The receipt notes `lease_lost` until the gateway ends that claim.
+- `inbox` no longer stops with a lease error on a job that started at the gateway without a claim here (the
+  same lost answer, seen on a later run): it saves that batch from the gateway's copy and goes on with the rest.
+- `inbox` claims for about 90 seconds and then reports how many jobs still wait in `waiting_at_gateway`; `next`
+  says to run `inbox` again. A host that cuts long commands loses nothing already saved.
+
 ## [0.3.5] - 2026-11-07
 
 - `recover` no longer times out on a long history. The gateway reads every kept body of a conversation (about
