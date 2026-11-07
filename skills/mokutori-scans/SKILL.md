@@ -146,7 +146,10 @@ When the owner says pages are missing (for example the page numbers jump from 11
 prints, per device: `missing_here` (batches the gateway still keeps but this folder never got or lost, with
 their page numbers and gateway state), `waiting_at_gateway` (not read yet; `inbox` receives them),
 `missing_pages` (page numbers no batch at the gateway or here carries) and `unreadable`. Then run
-`sh M recover` to save the missing batches here, and `sh M inbox` to read them as usual. Pages listed in
+`sh M recover` to save the missing batches here, and `sh M inbox` to read them as usual. A conversation's
+history is slow to fetch, so each run checks for about 40 seconds (`--seconds`), starting with the conversations
+that were open when a gap in your page numbers opened, and keeps its place: run it again until
+`remaining_conversations` is 0. `gaps_here` lists the page numbers still missing in your folder. Pages listed in
 `missing_pages` never reached this bot (or longer ago than the gateway keeps messages, 30 days by default):
 tell the owner which pages, so they can send those scans again from the app. `other_senders_waiting` shows the
 messages `inbox` ignores because their sender is not paired here; a pairing request carries 0 files.

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-07
+
+- `recover` no longer times out on a long history. The gateway reads every kept body of a conversation (about
+  100 in a full one) from its store before it answers, which took longer than the client's 15-second request
+  limit, so 0.3.4's `recover` failed on a real agent. A history request now has 170 seconds, and a run checks
+  conversations for about `--seconds` (default 40; at least one) and keeps its place, so a host that cuts long
+  commands loses nothing: run `recover` again until `remaining_conversations` is 0. Conversations that were open
+  while a gap in this folder's page numbers opened are checked first, so the missing batches usually come back
+  in the first run. `--restart` checks everything again; a finished pass starts over on the next run.
+- The report adds `checked_now` (conversation, time, turns, seconds), `remaining_conversations`, and per device
+  `conversations_checked`, `turns_at_gateway`, `batches_here` and `gaps_here` (page numbers still missing in
+  this folder). `missing_pages` appears once every conversation of the device is checked.
+
 ## [0.3.4] - 2026-11-07
 
 - New `recover` command for pages the owner sent that the agent does not have. It compares what each paired

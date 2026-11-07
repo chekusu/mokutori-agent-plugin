@@ -4,7 +4,7 @@ Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok
 any agent that can run a shell command. Muse connects through the included optional MCP bridge.
 No computer or desktop app is needed on the scanning side.
 
-**Current plugin version: 0.3.4**
+**Current plugin version: 0.3.5**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·
@@ -202,7 +202,11 @@ that device; previously saved pages remain available.
 batches this folder does not hold with the bot's key, verifies them as `inbox` verifies a job, and saves them as
 unread batches. It covers a batch that was marked read by another run or host whose files did not survive, one
 that ended at the gateway before it was read, and files lost here. `recover MESSAGE_ID ...` saves named batches
-again. It also lists the page numbers no batch carries (pages the app never delivered) and the messages `inbox`
+again. The gateway reads every kept body of a conversation before it returns that history, which can take far
+longer than an ordinary request, so `recover` allows 170 seconds per history, checks for about `--seconds`
+(default 40, at least one conversation) and keeps its place in `state.json`; run it again until
+`remaining_conversations` is 0. Conversations that were open while a gap in the local page numbers opened are
+checked first. It also lists the page numbers no batch carries (pages the app never delivered) and the messages `inbox`
 ignores because their sender is not paired.
 
 Limits: an agent learns about new pages only when it runs `inbox` (or a scheduled task does); waking an

@@ -662,8 +662,8 @@ class PluginFlow(unittest.TestCase):
         self.assertEqual([item["message_id"] for item in device["missing_here"]], sent[1:], checked)
         self.assertEqual([item["pages"] for item in device["missing_here"]], [["2"], ["3"]])
         self.assertEqual({item["gateway_state"] for item in device["missing_here"]}, {"completed"})
-        self.assertEqual((device["batches_at_gateway"], device["received_here"], device["restored"]), (3, 1, []))
-        self.assertEqual((device["pages_seen"], device["missing_pages"]), (["1–3"], []))
+        self.assertEqual((device["batches_checked"], device["received_here"], device["restored"]), (3, 1, []))
+        self.assertEqual((device["gaps_here"], device["missing_pages"], checked["remaining_conversations"]), ([], [], 0))
         self.assertFalse((plugin.Home(self.home).inbox / sent[1]).exists())
         self.assertIn("without --check", checked["next"])
         restored = self.mokutori("recover")
@@ -693,10 +693,42 @@ class PluginFlow(unittest.TestCase):
         device = report["devices"][0]
         self.assertEqual([item["message_id"] for item in device["waiting_at_gateway"]], [late], report)
         self.assertEqual(device["waiting_at_gateway"][0]["pages"], ["6"])
-        self.assertEqual((device["pages_seen"], device["missing_pages"]), (["1–2", "6"], ["3–5"]))
+        self.assertEqual((device["gaps_here"], device["missing_pages"]), ([], ["3–5"]))
         self.assertEqual(report["restored"], 0)
         self.assertIn("pages 3–5", report["next"])
         self.assertEqual([batch["message_id"] for batch in self.mokutori("inbox")["batches"]], [first, late])
+
+    def test_recover_checks_one_conversation_per_short_run_and_keeps_its_place(self):
+        # A full conversation's history is slow to fetch, so a host's command timeout must not lose the work.
+        _, ipad, _ = self.paired_device()
+        sent, conversations = [], []
+        for number in (1, 2, 3, 4):
+            if number > 1:
+                time.sleep(1.1)
+                ipad.state["conversation_id"] = None      # the app opens a new conversation when one is full
+            sent.append(self.send_pages(ipad, number))
+            conversations.append(ipad.state["conversation_id"])
+        self.mokutori("inbox", "--ack", *[batch["message_id"] for batch in self.mokutori("inbox")["batches"]])
+        self.lose_locally(sent[1])
+        runs = []
+        while not runs or runs[-1]["remaining_conversations"]:
+            runs.append(self.mokutori("recover", "--seconds", "0"))
+            self.assertEqual(len(runs[-1]["checked_now"]), 1, runs[-1])
+            self.assertLessEqual(len(runs), 5)
+        self.assertEqual([run["remaining_conversations"] for run in runs], [3, 2, 1, 0])
+        checked = [run["checked_now"][0]["conversation_id"] for run in runs]
+        self.assertEqual(sorted(checked), sorted(conversations))
+        # The conversations open while the gap here (page 2) opened come first, newest first: the one after the
+        # gap's later batch (page 3) waits, so the lost batch is back in the second run.
+        self.assertEqual(checked[:2], [conversations[2], conversations[1]])
+        self.assertEqual([run["restored"] for run in runs], [0, 1, 0, 0])
+        device = runs[-1]["devices"][0]
+        self.assertEqual((device["restored"], device["missing_pages"], device["gaps_here"]), ([sent[1]], [], []))
+        self.assertIn("remaining_conversations is 0", runs[0]["next"])
+        self.assertEqual([batch["message_id"] for batch in self.mokutori("inbox")["batches"]], [sent[1]])
+        # The pass is complete: the next run starts again from the beginning and finds nothing missing.
+        again = self.mokutori("recover")
+        self.assertEqual((len(again["checked_now"]), again["restored"], again["remaining_conversations"]), (4, 0, 0))
 
     def test_recover_shows_unpaired_senders_that_inbox_ignores(self):
         self.paired_device()
@@ -829,6 +861,17 @@ class RecoverReport(unittest.TestCase):
         self.assertEqual(plugin.batch_numbers("Mokutori 扫描 · 第 12–10 页\n第 12 页：ready\n第 10 页：ready"), [12, 10])
         self.assertEqual(plugin.batch_numbers("Mokutori 扫描 · 第 1–999999999 页"), [])
         self.assertEqual(plugin.batch_numbers("hello"), [])
+
+    def test_conversations_open_during_a_gap_here_come_first(self):
+        windows = plugin.gap_windows([(list(range(1, 113)), "2026-11-06T17:03:10Z"),
+                                      ([126, 127], "2026-11-06T17:07:40Z"), ([128], "2026-11-06T17:08:00Z")])
+        self.assertEqual(windows, [("2026-11-06T17:03:10Z", "2026-11-06T17:07:40Z")])
+        conversations = [{"conversation_id": "cnv_a", "actor_id": "act", "created_at": "2026-11-05T10:00:00Z"},
+                         {"conversation_id": "cnv_b", "actor_id": "act", "created_at": "2026-11-06T16:00:00Z"},
+                         {"conversation_id": "cnv_c", "actor_id": "act", "created_at": "2026-11-06T18:00:00Z"},
+                         {"conversation_id": "cnv_x", "actor_id": "other", "created_at": "2026-11-06T17:05:00Z"}]
+        order = plugin.recover_order(conversations, {"act": {}}, {"act": windows})
+        self.assertEqual([c["conversation_id"] for c in order], ["cnv_b", "cnv_c", "cnv_a"])
 
     def test_runs_and_gaps(self):
         self.assertEqual(plugin.page_runs([3, 1, 2, 7, 7, 9, 10]), ["1–3", "7", "9–10"])
