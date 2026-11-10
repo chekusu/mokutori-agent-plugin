@@ -1,8 +1,23 @@
 {
   "name": "mokutori",
   "version": "0.3.6",
-  "description": "Receive pages scanned with the Mokutori iPad app straight in this agent: pair with a QR code, then read each batch of corrected page images and OCR text.",
+  "description": "Receive pages scanned with the Mokutori app for iPhone and iPad straight in this agent: pair with a QR code, then read each batch of corrected page images and OCR text.",
   "author": {
     "name": "Chekusu"
-  }
+  },
+  "homepage": "https://mokutori.com/en/agents",
+  "repository": "https://github.com/chekusu/mokutori-agent-plugin",
+  "license": "MIT",
+  "keywords": [
+    "mokutori",
+    "scanner",
+    "document-scanner",
+    "ocr",
+    "iphone",
+    "ipad",
+    "book-scanning",
+    "receipts",
+    "japanese-ocr",
+    "scan-to-agent"
+  ]
 }
