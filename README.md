@@ -1,8 +1,11 @@
 # Mokutori for agents
 
-Pages scanned with the Mokutori iPad app arrive directly in your own agent: Grok Bot, Codex, Claude Code or
-any agent that can run a shell command. Muse connects through the included optional MCP bridge.
-No computer or desktop app is needed on the scanning side.
+Pages scanned with [Mokutori](https://mokutori.com/en), the free document scanner and OCR app for iPhone and iPad
+([App Store](https://apps.apple.com/app/id6826908353)), arrive directly in your own agent: Grok Bot, Codex,
+Claude Code or any agent that can run a shell command. Muse connects through the included optional MCP bridge.
+No computer or desktop app is needed on the scanning side: scan book pages, documents or receipts on the phone or
+tablet, and the agent receives corrected page images plus on-device OCR text (Japanese, including vertical text,
+Chinese and English).
 
 **Current plugin version: 0.3.6**
 
@@ -12,7 +15,7 @@ No computer or desktop app is needed on the scanning side.
 [Security policy](https://github.com/chekusu/mokutori-agent-plugin/blob/main/SECURITY.md)
 
 ```
-Mokutori iPad ──sealed chat (pages + OCR)──> Friends gateway ──> this agent's bot ──> `mokutori inbox`
+Mokutori (iPhone / iPad) ──sealed chat (pages + OCR)──> Friends gateway ──> this agent's bot ──> `mokutori inbox`
      ▲                                        (bots.yobiru.com)
      └── scans the one-time QR code from `mokutori pair`
 ```
@@ -46,7 +49,7 @@ breaks its commands. If a host supports loading a skill by path, point it at
 | Agent | How |
 | --- | --- |
 | Codex | Install the complete folder as a plugin; its manifest is `.codex-plugin/plugin.json`. |
-| Claude Code | Install this folder as a plugin (`.claude-plugin/plugin.json`); the skill is discovered from `skills/`. |
+| Claude Code | `/plugin install mokutori --marketplace chekusu/mokutori-agent-plugin` (Claude Code 2.1.275 or later), or `/plugin marketplace add chekusu/mokutori-agent-plugin` then `/plugin install mokutori@mokutori`. A local checkout also works as a plugin folder (`.claude-plugin/plugin.json`); the skill is discovered from `skills/`. |
 | Grok Bot | Register the skill with the owner's permission and keep the folder under `/workspace`. If Grok still has the older Mitori plugin, follow the upgrade note below before pairing. |
 | Muse | Run the included [MCP bridge](muse/README.md) on your own host and connect Muse to its HTTPS `/mcp` endpoint with that installation's API key. |
 

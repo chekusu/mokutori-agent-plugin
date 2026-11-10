@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Claude Code can install the plugin from this repository as a marketplace
+  (`/plugin install mokutori --marketplace chekusu/mokutori-agent-plugin`); `.claude-plugin/marketplace.json` lists
+  the plugin at the repository root.
+- The README and manifests describe the Mokutori app for iPhone and iPad (it is universal since 1.0) and link to
+  the App Store.
+
 ## [0.3.6] - 2026-11-07
 
 - Batches no longer go missing late in a long scan. A claimed job carries a transcript of its conversation, and

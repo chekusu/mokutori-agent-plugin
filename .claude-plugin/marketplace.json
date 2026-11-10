@@ -1,0 +1,17 @@
+{
+  "name": "mokutori",
+  "description": "Mokutori: scan paper on iPhone or iPad and receive the pages in your agent.",
+  "owner": {
+    "name": "chekusu Inc.",
+    "url": "https://mokutori.com/"
+  },
+  "plugins": [
+    {
+      "name": "mokutori",
+      "source": "./",
+      "description": "Receive pages scanned with the Mokutori app for iPhone and iPad straight in this agent: pair with a QR code, then read each batch of corrected page images and OCR text.",
+      "homepage": "https://mokutori.com/en/agents",
+      "category": "productivity"
+    }
+  ]
+}
