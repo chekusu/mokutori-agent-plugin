@@ -39,7 +39,9 @@ class PairingLinks(unittest.TestCase):
     def test_cli_returns_both_links_and_keeps_qr_scheme(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = plugin.Home(temporary)
-            home.save({"v": 1, "setup": self.setup, "pairings": {}, "devices": {}})
+            # `pair` refuses a code without a usable bot key, so the CLI fixtures carry a real (synthetic) one.
+            home.save({"v": 1, "setup": dict(self.setup, bot_key=plugin.E.generate()[1]), "pairings": {},
+                       "devices": {}})
             args = SimpleNamespace(minutes=30, label=None, png=None, terminal=False, wait=0)
             stream = io.StringIO()
             with mock.patch.object(plugin, "qr_matrix", wraps=plugin.qr_matrix) as matrix:
@@ -88,7 +90,8 @@ class PairingLinks(unittest.TestCase):
     def test_cli_pair_carries_grok_brand(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = plugin.Home(temporary)
-            home.save({"v": 1, "setup": dict(self.setup, agent="grok"), "pairings": {}, "devices": {}})
+            home.save({"v": 1, "setup": dict(self.setup, agent="grok", bot_key=plugin.E.generate()[1]),
+                       "pairings": {}, "devices": {}})
             args = SimpleNamespace(minutes=15, label=None, png=None, terminal=False, wait=0)
             stream = io.StringIO()
             with redirect_stdout(stream), self.assertRaises(SystemExit):

@@ -48,7 +48,11 @@ ALLOWED_ORIGINS_ENV = "MOKUTORI_MUSE_ALLOWED_ORIGINS"
 FIXTURE_ENV = "MOKUTORI_MUSE_FIXTURE_ONLY"
 AUDIT_PATH_ENV = "MOKUTORI_MUSE_AUDIT_PATH"
 NOTICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$\Z")
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\Z")
+# The names the CLI saves received files under (plain: no separator, no leading dot).
+NAME_RE = core.NAME_RE
+MAX_SESSIONS = 256
+# How long one `inbox` run of the CLI is given; the CLI never starts a claim so late that this would cut it short.
+INBOX_TIMEOUT_SECONDS = core.HOST_SECONDS
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
                ".webp": "image/webp", ".heic": "image/heic", ".gif": "image/gif"}
 
@@ -309,7 +313,9 @@ class Service:
         command = [sys.executable, str(SCRIPTS / "mokutori.py"), "--home", str(self.home.path),
                    "inbox", "--no-pair-check", "--limit", str(limit)]
         try:
-            process = subprocess.run(command, capture_output=True, text=True, timeout=120)
+            # Never end the CLI inside a claim: the gateway would keep a lease the CLI never saw. The CLI starts
+            # no claim late in a run and says how long a host must wait for that (see HOST_SECONDS there).
+            process = subprocess.run(command, capture_output=True, text=True, timeout=INBOX_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as error:
             raise ConnectorError("inbox_unavailable: the local inbox operation timed out") from error
         except OSError as error:
@@ -448,6 +454,11 @@ class MCPServer:
     def create_session(self) -> str:
         session_id = secrets.token_urlsafe(24)
         with self._phase_lock:
+            # Every initialize makes a session and nothing ends one: keep the newest MAX_SESSIONS (dicts keep
+            # insertion order), so a client that reconnects for months cannot grow this without bound. A dropped
+            # session answers 404 unknown_mcp_session, on which a client initializes again.
+            while len(self._sessions) >= MAX_SESSIONS:
+                self._sessions.pop(next(iter(self._sessions)))
             self._sessions[session_id] = {"phase": "new", "protocol_version": None}
         return session_id
 
@@ -476,7 +487,10 @@ class MCPServer:
         return self.protocol_version_for()
 
     def authorized(self, supplied: Optional[str]) -> bool:
-        return isinstance(supplied, str) and hmac.compare_digest(supplied, self.api_key)
+        # Compare bytes: compare_digest raises TypeError on a str with non-ASCII characters, and an HTTP header
+        # may carry any Latin-1 byte.
+        return isinstance(supplied, str) and hmac.compare_digest(supplied.encode("utf-8", "surrogateescape"),
+                                                                 self.api_key.encode("utf-8", "surrogateescape"))
 
     def dispatch(self, message: Dict[str, Any], session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         response = self._dispatch(message, session_id)

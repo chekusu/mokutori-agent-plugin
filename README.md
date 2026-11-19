@@ -7,7 +7,7 @@ No computer or desktop app is needed on the scanning side: scan book pages, docu
 tablet, and the agent receives corrected page images plus on-device OCR text (Japanese, including vertical text,
 Chinese and English).
 
-**Current plugin version: 0.3.6**
+**Current plugin version: 0.3.7**
 
 [Website](https://mokutori.com/) · [Source](https://github.com/chekusu/mokutori-agent-plugin) ·
 [Releases](https://github.com/chekusu/mokutori-agent-plugin/releases) ·
@@ -146,7 +146,7 @@ sh scripts/mokutori pair --terminal                                  # one-time 
 sh scripts/mokutori pair-check --wait 120                            # find the device's pairing request
 sh scripts/mokutori pair-requests                                    # requests waiting for the owner
 sh scripts/mokutori pair-accept PAIRING_ID                           # the owner confirmed: admit it
-sh scripts/mokutori pair-decline PAIRING_ID                          # the owner declined
+sh scripts/mokutori pair-decline PAIRING_ID                          # the owner declined (or: cancel a confirmed pairing that cannot finish)
 sh scripts/mokutori inbox                                            # save and show new pages
 sh scripts/mokutori inbox --ack MESSAGE_ID ...                       # clear the unread markers of batches you read
 sh scripts/mokutori inbox --ack                                      # ... or of every batch inbox showed before
@@ -201,6 +201,29 @@ an owner-only retry command. They are retried only after that explicit resolutio
 and files checked again. Existing local acknowledgement is retained in that same atomic receipt update. A lost finish response is reconciled against gateway metadata. Disconnecting a device blocks future sends and stops new receipts from
 that device; previously saved pages remain available.
 
+One job, pairing or conversation that fails never ends a run. `inbox` lists it in `errors` (a gateway error
+answer, an engine command that did not answer within 120 seconds, a file that cannot be saved, malformed gateway
+data) and receives the rest; a saved batch whose message the gateway has since removed is closed with
+`gone_at_gateway` instead of being retried. A confirmed pairing that cannot finish is listed in `pairing_errors`
+by `inbox`, `pair-check`, `pair-requests` and `pair --wait`, and is tried again on each run. A device that is
+already admitted completes its pairing once its proof job has ended at the gateway; `pair-decline PAIRING_ID`
+cancels a confirmed pairing instead, blocking the device at the gateway as `unpair` does.
+
+Received files are saved under plain names and listed with their `kind` (`image`, `pdf`, `audio`, `video`,
+`binary` or `text`); only text files are read into `ocr_markdown`. A name with spaces, other punctuation or a
+clash with the plugin's own `message.txt` is changed to a safe one (`sent_as` keeps the sender's name); a
+name never contains a path separator or starts with a dot.
+
+Before each claim `inbox` notes the job in `state.json`. If the process is ended inside the claim, the next
+`inbox` receives the job from the gateway's list, or, once the gateway has marked it read, from the gateway's
+copy. No claim starts later than 240 seconds into a command, so a host that runs the CLI as a child process and
+waits 600 seconds (the Muse connector does) never ends it inside a claim.
+
+`setup` can be run again after it failed or was interrupted: the bot it enrolled is noted in `state.json`
+(`setup_pending`) and found in Mokutori's own owner home, so the same command continues from the missing step
+(`resumed: true`) and never enrolls a second bot. A setup is saved only once the bot's public card with its
+end-to-end key was read; `pair` makes no code without that key.
+
 `recover` reads the owner's view of each paired device's conversations at the gateway (read-only), opens the
 batches this folder does not hold with the bot's key, verifies them as `inbox` verifies a job, and saves them as
 unread batches. It covers a batch that was marked read by another run or host whose files did not survive, one
@@ -210,7 +233,9 @@ longer than an ordinary request, so `recover` allows 170 seconds per history, ch
 (default 40, at least one conversation) and keeps its place in `state.json`; run it again until
 `remaining_conversations` is 0. Conversations that were open while a gap in the local page numbers opened are
 checked first. It also lists the page numbers no batch carries (pages the app never delivered) and the messages `inbox`
-ignores because their sender is not paired.
+ignores because their sender is not paired. A message that cannot be read is listed in `unreadable` and a
+conversation that cannot be read in `conversations_failed`; neither stops the pass, and the next pass tries the
+conversation again.
 
 Limits: an agent learns about new pages only when it runs `inbox` (or a scheduled task does); waking an
 idle hosted agent is not automatic. The official gateway stores sealed messages for up to 30 days.

@@ -59,6 +59,10 @@ the same machine as an existing Yobiru owner directory. Do not copy an owner dir
 use it: set up with the email instead. Existing setups automatically use their saved location and do not
 need this command.
 
+If `setup` fails after the code was accepted (its error ends with "Run the same `setup` command again"), or
+the command was cut off, run the same command again. It continues with the bot it already created
+(`resumed: true`) and needs no new code. Do not use another data folder or `--force` to get past it.
+
 ## Rename
 
 `sh M rename --name "NEW NAME"` changes the bot's name on the gateway; pairings and pages stay. Rename
@@ -87,7 +91,15 @@ the next time it reads the bot. Do not run `setup --force` to change a name.
    run `sh M pair-decline PAIRING_ID` if they do not. Never accept on your own.
    `pair-accept` admits the device; Mokutori then shows the agent as paired and starts sending.
    `pair-decline` ends the request; Mokutori tells the owner it was declined.
-5. Report pairing success **only if `paired` is nonempty**. `ok: true`, a generated code, a link opening
+   If `pair-accept` answers `ok: false` with `pairing_errors`, the owner's confirmation is saved and the
+   pairing is finished by a later `pair-check` or `inbox`; see the next step.
+5. `pair-check`, `pair-requests`, `inbox` and `pair --wait` list a confirmed pairing that could not be
+   finished under `pairing_errors` (with `pairing_id`, `device_name_untrusted`, `admitted`, `error`) and go on
+   with everything else. It is tried again on each run, so check again a few times. If it keeps failing, tell
+   the owner what `error` says and ask whether to cancel it: `sh M pair-decline PAIRING_ID` cancels a
+   confirmed pairing too, blocks that device at the gateway and removes it from `devices`. The owner then
+   pairs again with a fresh code. Never cancel on your own.
+6. Report pairing success **only if `paired` is nonempty**. `ok: true`, a generated code, a link opening
    the app, or a request waiting for the owner does not establish success. If the code expired with no
    request, generate and show a fresh image and link.
 
@@ -126,7 +138,9 @@ real-time presence signal; do not report online from pairing, HTTP reachability 
 ## Receive pages
 
 `sh M inbox` saves new batches under the data folder and prints, per batch: its `message_id`, a short summary,
-the OCR markdown, the saved file paths and the folder. Read them, look at the page images when needed, then
+the OCR markdown, the saved file paths and the folder. Each file has a `kind`: `image`, `pdf`, `audio`, `video`,
+`binary` or `text`; only text files are in `ocr_markdown`, so open the others from their `path`. A file whose
+name had to be changed to be saved safely shows the sender's name in `sent_as` (untrusted). Read them, look at the page images when needed, then
 acknowledge exactly those batches with `sh M inbox --ack MESSAGE_ID ...` (the `next` field spells out the
 command) so they leave the local unread list; saved files remain. `--ack` alone acknowledges every batch an
 earlier `inbox` printed. Pages often keep arriving while you read: a batch that arrived after your last `inbox`
@@ -137,7 +151,9 @@ this sends no reply. The gateway can also mark expired claims
 read, in which case the plugin recovers its authenticated local cache. `inbox` also finishes pairings the
 owner confirmed and lists new `pair_requests`; ask the owner about those as above.
 If `errors` reports an uncertain claim or unconfirmed finish, report it and preserve its state; do not reset
-the data folder, reclaim the job or repeat a send to force success.
+the data folder, reclaim the job or repeat a send to force success. An entry in `errors` concerns that one
+message only: the other batches of the run were still received, so read `batches` as usual and run `inbox`
+again later; if the same message keeps failing, tell the owner its `message_id` and `error`.
 
 ## Pages the owner sent but you do not have
 
@@ -145,7 +161,9 @@ When the owner says pages are missing (for example the page numbers jump from 11
 `sh M recover --check`. It compares what each paired iPad sent through the gateway with this data folder and
 prints, per device: `missing_here` (batches the gateway still keeps but this folder never got or lost, with
 their page numbers and gateway state), `waiting_at_gateway` (not read yet; `inbox` receives them),
-`missing_pages` (page numbers no batch at the gateway or here carries) and `unreadable`. Then run
+`missing_pages` (page numbers no batch at the gateway or here carries), `unreadable` and
+`conversations_failed` (conversations the gateway could not show in this pass; the next pass, or
+`recover --restart`, tries them again). Then run
 `sh M recover` to save the missing batches here, and `sh M inbox` to read them as usual. A conversation's
 history is slow to fetch, so each run checks for about 40 seconds (`--seconds`), starting with the conversations
 that were open when a gap in your page numbers opened, and keeps its place: run it again until

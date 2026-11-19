@@ -8,6 +8,52 @@
 - The README and manifests describe the Mokutori app for iPhone and iPad (it is universal since 1.0) and link to
   the App Store.
 
+## [0.3.7] - 2026-11-19
+
+- A confirmed pairing that cannot finish no longer stops every command. `inbox`, `pair-check`, `pair-requests`
+  and `pair --wait` finished confirmed pairings first and failed as a whole when one of them could not finish
+  (its request message gone from the gateway, or its proof job lost after admission), on every run. Each pairing
+  is now finished on its own; one that fails is listed in the new `pairing_errors` (pairing id, device name,
+  whether the device is already admitted, the error, what to do) and everything else goes on. A device that is
+  already admitted completes its pairing when the proof job has ended at the gateway unread, for example an
+  expired claim the gateway marked read: the proof was verified before the owner confirmed, and a copy this
+  client holds is still checked. `pair-decline PAIRING_ID` now also cancels such a confirmed pairing: it blocks
+  the device at the gateway, as `unpair` does, and removes it here.
+- `setup` continues after a step failed or the process was ended. Enrollment creates the bot and saves its
+  credential first; when binding the reader or reading the card then failed, every later `setup` was refused
+  ("this data home already holds an owner credential"), also with `--force`. `setup` now notes the new bot in
+  `state.json` (`setup_pending`), recognises a bot enrolled by an interrupted run from Mokutori's own owner home,
+  and goes on from the missing step without enrolling again; the answer carries `resumed: true`.
+- `setup` no longer reports success without the bot's key. An error answer to the card request (404, 429, 5xx)
+  was saved as a card, with `handle`, `name` and the key empty, and `pair` then printed a code with `k=None`.
+  The card must now be readable and carry a usable end-to-end key, otherwise `setup` fails and can be run
+  again. `pair` refuses to make a code without that key; for a setup saved that way by 0.3.6 or earlier it reads
+  the card once more and keeps the key.
+- One job that fails no longer ends `inbox` or `recover` with a traceback on every run. A gateway error answer,
+  an engine command that does not answer within 120 seconds, an engine error, an undecodable file and malformed
+  gateway data are now that job's entry in `errors`, as authentication failures already were, and the remaining
+  jobs are received. A saved batch whose message the gateway has since removed is closed (`gone_at_gateway`)
+  instead of failing forever, and a cached claim of such a message is reported once. In `recover`, a message
+  that cannot be read goes to `unreadable` and a conversation that cannot be read is listed in the new
+  `conversations_failed`; it no longer holds the front of every run, `remaining_conversations` reaches 0, and
+  the next pass tries it again. A hanging engine command ends with a JSON error.
+- Batches with other files than JPEG, PNG, HEIC, WebP and text are received. A GIF, HEIF, AVIF, PDF, audio or
+  video file was read back as text and stopped `inbox` on every run. Files are now listed with `kind` `image`,
+  `pdf`, `audio`, `video`, `binary` or `text`, and only text goes into `ocr_markdown`.
+- Batches whose file names contain spaces or non-ASCII letters, or a file named `message.txt`, are received
+  instead of refused. Such a file is saved under a safe name (letters and digits of any script, `.`, `_`, `-`;
+  never a separator or a leading dot; at most 100 characters; `-2`, `-3` for a second file of the same name or
+  for the plugin's own `message.txt`) and lists the sender's name in `sent_as`. Names the app sends are
+  unchanged.
+- The Muse connector no longer ends `inbox` inside a claim. It stopped the command after 120 seconds while one
+  claim may take 170; the gateway then kept a lease the client never saw and marked the batch read ten minutes
+  later, and only `recover` found it. `inbox` now notes a job in `state.json` before claiming it and saves it
+  from the gateway's copy on a later run if that happened, starts no claim later than 240 seconds into a
+  command, and the connector waits 600 seconds.
+- Muse connector: an `Authorization` header with non-ASCII characters answers 401 instead of dropping the
+  connection, and the connector keeps the 256 newest MCP sessions instead of every session ever opened.
+- The pairing QR image is written with owner-only permissions whatever the umask.
+
 ## [0.3.6] - 2026-11-07
 
 - Batches no longer go missing late in a long scan. A claimed job carries a transcript of its conversation, and
