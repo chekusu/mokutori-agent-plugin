@@ -379,8 +379,11 @@ class PluginFlow(unittest.TestCase):
         plugin.check_pairings(home)
         self.confirm_in_state(home)
         with mock.patch.object(plugin, "engine", side_effect=interrupt_accept):
-            with self.assertRaises(plugin.MokutoriError):
-                plugin.check_pairings(home)
+            # The pairing that cannot finish is reported; it no longer stops the command.
+            paired, _, stuck = plugin.check_pairings(home)
+        self.assertEqual(paired, [])
+        self.assertEqual([item["pairing_id"] for item in stuck], [pairing["pairing_id"]])
+        self.assertIn("simulated interruption", stuck[0]["error"])
         self.assertEqual(home.state()["devices"], {})
         intruder = app.App()
         intruder.pair(pairing["pair_url"])
@@ -470,8 +473,9 @@ class PluginFlow(unittest.TestCase):
             plugin.reader_job(home, setup, "claim", summary["job_id"], "--lease-seconds", "600")
             raise plugin.MokutoriError("simulated process exit after proof claim")
         with mock.patch.object(plugin, "receive_job", side_effect=interrupt_after_claim):
-            with self.assertRaises(plugin.MokutoriError):
-                plugin.check_pairings(home)
+            paired, _, stuck = plugin.check_pairings(home)
+        self.assertEqual(paired, [])
+        self.assertEqual([(item["pairing_id"], item["admitted"]) for item in stuck], [(pairing["pairing_id"], True)])
         with closing(sqlite3.connect(str(self.root / "gw" / "gateway.sqlite3"))) as database:
             database.execute("UPDATE messages SET lease_expires=? WHERE id=?", (time.time() - 1, receipt["message_id"]))
             database.commit()

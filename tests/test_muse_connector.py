@@ -323,5 +323,80 @@ class AuditTests(unittest.TestCase):
             self.assertNotIn("PRIVATE", "".join(call.args[0] for call in stderr.write.call_args_list))
 
 
+class HardeningTests(unittest.TestCase):
+    def test_a_non_ascii_key_is_refused_not_a_crash(self):
+        server = MCPServer(FakeService(), "a" * 32)
+        for supplied in ("ключ" * 8, "a" * 31 + "é", "\udcff" * 32, "", None, b"a" * 32):
+            with self.subTest(supplied=supplied):
+                self.assertFalse(server.authorized(supplied))
+        self.assertTrue(server.authorized("a" * 32))
+        self.assertTrue(MCPServer(FakeService(), "ключ-секрет-ключ-секрет").authorized("ключ-секрет-ключ-секрет"))
+
+    def test_a_non_ascii_authorization_header_answers_401(self):
+        import http.client
+        http_server = HTTPServer(("127.0.0.1", 0), MCPServer(FakeService(), "a" * 32))
+        thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}).encode()
+            for value in (b"Bearer \xff\xfe\xfd" + b"a" * 29, "Bearer ключ".encode("utf-8")):
+                connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+                connection.putrequest("POST", "/mcp")
+                connection.putheader("Authorization", value)
+                connection.putheader("Accept", "application/json, text/event-stream")
+                connection.putheader("Content-Type", "application/json")
+                connection.putheader("Content-Length", str(len(body)))
+                connection.endheaders(body)
+                response = connection.getresponse()
+                self.assertEqual((response.status, json.loads(response.read())), (401, {"error": "unauthorized"}))
+                connection.close()
+        finally:
+            http_server.shutdown()
+            http_server.server_close()
+            thread.join(timeout=2)
+
+    def test_sessions_are_capped_and_the_newest_are_kept(self):
+        import muse_connector
+        server = MCPServer(FakeService(), "a" * 32)
+        sessions = [server.create_session() for _ in range(muse_connector.MAX_SESSIONS + 50)]
+        self.assertEqual(len(server._sessions), muse_connector.MAX_SESSIONS)
+        self.assertFalse(server.has_session(sessions[0]))
+        self.assertEqual(server.phase_for(sessions[0]), "missing")
+        self.assertTrue(all(server.has_session(session) for session in sessions[-muse_connector.MAX_SESSIONS:]))
+        ready = sessions[-1]
+        server.dispatch({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                         "params": {"protocolVersion": "2025-11-25"}}, session_id=ready)
+        self.assertEqual(server.phase_for(ready), "awaiting_initialized")
+
+    def test_the_cli_is_given_the_time_it_says_a_host_must_wait(self):
+        import muse_connector
+        with tempfile.TemporaryDirectory() as temp:
+            service = Service(pathlib.Path(temp))
+            process = type("Process", (), {"returncode": 0, "stdout": json.dumps({"ok": True, "batches": []}),
+                                           "stderr": ""})()
+            with mock.patch("muse_connector.subprocess.run", return_value=process) as run:
+                service._run_inbox(1)
+            timeout = run.call_args.kwargs["timeout"]
+        self.assertEqual(timeout, cli.HOST_SECONDS)
+        self.assertEqual(muse_connector.INBOX_TIMEOUT_SECONDS, cli.HOST_SECONDS)
+        # The old limit (120 s) was shorter than one claim (170 s): the CLI was ended inside it.
+        self.assertGreater(timeout, cli.LAST_CLAIM_SECONDS + max(cli.CLAIM_TIMEOUT, cli.C.MAX_TRANSFER_SECONDS))
+
+    def test_files_renamed_by_the_cli_are_listed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = Service(pathlib.Path(temp))
+            folder = service.home.inbox / "msg_saved"
+            folder.mkdir(parents=True)
+            files = []
+            for name, kind in (("領収書_2026.txt", "text"), ("scan.pdf", "pdf"), ("page-001.jpg", "image")):
+                (folder / name).write_bytes(b"x")
+                files.append({"name": name, "path": str(folder / name), "kind": kind})
+            files.append({"name": "../escape.txt", "path": str(folder / ".." / "escape.txt"), "kind": "text"})
+            service._run_inbox = lambda limit: {"batches": [{"message_id": "msg_saved", "files": files}]}
+            listed = service.list_scans(5)["batches"][0]["files"]
+        self.assertEqual([(item["name"], item["kind"]) for item in listed],
+                         [("領収書_2026.txt", "text"), ("scan.pdf", "pdf"), ("page-001.jpg", "image")])
+
+
 if __name__ == "__main__":
     unittest.main()

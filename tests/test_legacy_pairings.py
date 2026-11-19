@@ -89,7 +89,7 @@ class LegacyPairingStateTests(unittest.TestCase):
                               "e2e": {"opened": True, "sealed_by": sender}}}
         with mock.patch.object(plugin, "engine", return_value={"inbound": [review]}), \
                 mock.patch.object(plugin, "finish_pairing", return_value={"actor_id": sender}) as finish:
-            paired, requests = plugin.check_pairings(self.home)
+            paired, requests, _ = plugin.check_pairings(self.home)
         # A verified proof waits for the owner; nothing is admitted yet.
         self.assertEqual(paired, [])
         finish.assert_not_called()
@@ -116,7 +116,7 @@ class LegacyPairingStateTests(unittest.TestCase):
                 before = self.home.state_file.read_bytes()
                 with mock.patch.object(plugin, "engine", return_value={"inbound": [review]}), \
                         mock.patch.object(plugin, "finish_pairing") as finish:
-                    self.assertEqual(plugin.check_pairings(self.home), ([], []))
+                    self.assertEqual(plugin.check_pairings(self.home), ([], [], []))
                 finish.assert_not_called()
                 self.assertEqual(self.home.state_file.read_bytes(), before)
 
@@ -132,7 +132,7 @@ class LegacyPairingStateTests(unittest.TestCase):
                           "message": {"text": "%s aabbccddeeff %s" % (plugin.PAIR_PREFIX, proof),
                                       "e2e": {"opened": True, "sealed_by": sender}}}
                 with mock.patch.object(plugin, "engine", return_value={"inbound": [review]}):
-                    _, requests = plugin.check_pairings(self.home)
+                    _, requests, _ = plugin.check_pairings(self.home)
                 self.assertEqual(bool(requests), counted)
 
     def test_modern_verified_job_remains_resumable_after_qr_expiry(self):
@@ -142,7 +142,7 @@ class LegacyPairingStateTests(unittest.TestCase):
         self.home.save(self.state)
         with mock.patch.object(plugin, "engine", return_value={"inbound": []}), \
                 mock.patch.object(plugin, "finish_pairing", return_value={"actor_id": "actor_reserved"}) as finish:
-            self.assertEqual(plugin.check_pairings(self.home), ([{"actor_id": "actor_reserved"}], []))
+            self.assertEqual(plugin.check_pairings(self.home), ([{"actor_id": "actor_reserved"}], [], []))
         self.assertEqual(finish.call_count, 1)
         self.assertEqual(plugin.pairing_warnings(self.home.state()), [])
 
