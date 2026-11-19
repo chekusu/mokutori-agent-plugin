@@ -209,6 +209,22 @@ class StuckPairings(Fixture):
                     self.assertEqual(plugin.check_pairings(self.home), ([], [], []))
                 finish.assert_not_called()
 
+    def test_pair_decline_revokes_every_confirmed_pairing_of_that_device(self):
+        self.state["pairings"] = {"aaaaaaaaaaaa": self.confirmed(SENDER, JOBS[0], admitted=True),
+                                  "bbbbbbbbbbbb": self.confirmed(SENDER, JOBS[1])}
+        self.state["devices"] = {SENDER: {"name": "Study iPad", "e2e_key": KEY}}
+        self.home.save(self.state)
+        with mock.patch.object(plugin, "engine", return_value={"ok": True}):
+            code, result = self.run_main("pair-decline", "aaaaaaaaaaaa")
+        self.assertEqual((code, result["ok"]), (0, True))
+        saved = self.home.state()
+        self.assertEqual([plugin.pairing_state(saved["pairings"][key]) for key in ("aaaaaaaaaaaa", "bbbbbbbbbbbb")],
+                         ["revoked", "revoked"])
+        with mock.patch.object(plugin, "engine", return_value={"inbound": []}), \
+                mock.patch.object(plugin, "finish_pairing") as finish:
+            self.assertEqual(plugin.check_pairings(self.home), ([], [], []))
+        finish.assert_not_called()
+
     def test_pair_decline_changes_nothing_when_the_gateway_does_not_answer(self):
         self.admitted()
         before = self.home.state_file.read_bytes()

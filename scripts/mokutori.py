@@ -818,7 +818,12 @@ def cancel_pairing(home, state, setup, pairing_id):
         raise MokutoriError("the gateway did not take back this device's permission (%s); nothing was changed here"
                             % (blocked.get("detail") or blocked.get("error") or "no answer"))
     state.get("devices", {}).pop(sender, None)
-    pairing.update(revoked=True, cancelled_at=iso(now()))
+    pairing.update(cancelled_at=iso(now()))
+    # Every pairing of this sender, as `unpair` does: another confirmed one left resumable would grant the
+    # permission again on the next run.
+    for other in state.get("pairings", {}).values():
+        if isinstance(other, dict) and other.get("used_by") == sender:
+            other["revoked"] = True
     home.save(state)
     out({"ok": True, "declined": pairing_id, "cancelled": True, "unpaired": sender,
          "note": "Cancelled: this device is blocked at the gateway and no longer listed here; pages already saved "
