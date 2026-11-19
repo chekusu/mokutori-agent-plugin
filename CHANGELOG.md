@@ -2,12 +2,6 @@
 
 ## [Unreleased]
 
-- Claude Code can install the plugin from this repository as a marketplace
-  (`/plugin install mokutori --marketplace chekusu/mokutori-agent-plugin`); `.claude-plugin/marketplace.json` lists
-  the plugin at the repository root.
-- The README and manifests describe the Mokutori app for iPhone and iPad (it is universal since 1.0) and link to
-  the App Store.
-
 ## [0.3.7] - 2026-11-19
 
 - A confirmed pairing that cannot finish no longer stops every command. `inbox`, `pair-check`, `pair-requests`
@@ -53,6 +47,11 @@
 - Muse connector: an `Authorization` header with non-ASCII characters answers 401 instead of dropping the
   connection, and the connector keeps the 256 newest MCP sessions instead of every session ever opened.
 - The pairing QR image is written with owner-only permissions whatever the umask.
+- Claude Code can install the plugin from this repository as a marketplace
+  (`/plugin install mokutori --marketplace chekusu/mokutori-agent-plugin`); `.claude-plugin/marketplace.json` lists
+  the plugin at the repository root.
+- The README and manifests describe the Mokutori app for iPhone and iPad (it is universal since 1.0) and link to
+  the App Store.
 
 ## [0.3.6] - 2026-11-07
 
