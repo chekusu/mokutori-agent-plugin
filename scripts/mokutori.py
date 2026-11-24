@@ -1621,9 +1621,13 @@ def cmd_recover(home, a):
         if not isinstance(cid, str) or re.fullmatch(r"cnv_[a-z2-7]{16}", cid) is None:
             raise MokutoriError("gateway returned an invalid conversation id")
     mode = "check" if a.check else "save"
-    progress = state.get("recover_progress") or {}
-    if wanted or a.restart or progress.get("mode") != mode or progress.get("complete"):
+    progress_key = "recover_named_progress" if wanted else "recover_progress"
+    progress = state.get(progress_key) or {}
+    if (a.restart or progress.get("mode") != mode or progress.get("complete")
+            or (wanted and progress.get("wanted") != sorted(wanted))):
         progress = {"mode": mode, "started_at": iso(now()), "checked": {}}
+    if wanted:
+        progress["wanted"] = sorted(wanted)
     checked = progress["checked"]
     windows = {actor: gap_windows(batches) for actor, batches in local_batches(state, devices).items()}
     ordered = recover_order(conversations, devices, windows)
@@ -1644,7 +1648,9 @@ def cmd_recover(home, a):
         """One message of a conversation. Whatever it raises is that message's entry in `unreadable`."""
         actor = view["actor_id"]
         job_id = validated_job_id(message.get("message_id"))
-        found.add(job_id)
+        if job_id in wanted:
+            found.add(job_id)
+            entry.setdefault("found", []).append(job_id)
         receipt = received.get(job_id) or {}
         if receipt.get("ignored") or receipt.get("pairing_id"):
             return
@@ -1717,9 +1723,12 @@ def cmd_recover(home, a):
         return entry
 
     for conversation in ordered:
+        if wanted and done(conversation):
+            found.update(checked[conversation["conversation_id"]].get("found", []))
+    for conversation in ordered:
         if wanted and wanted <= found:
             break
-        if done(conversation) and not wanted:
+        if done(conversation):
             continue
         if checked_now and time.monotonic() - started > a.seconds:
             break
@@ -1736,16 +1745,16 @@ def cmd_recover(home, a):
                                  "created_at": conversation.get("created_at"), "turns": conversation.get("turns"),
                                  "seconds": round(time.monotonic() - began, 1)},
                                 **({"error": failures[0]["error"]} if failures else {})))
-        if not wanted:
-            state["recover_progress"] = progress
-            home.save(state)
-    remaining = [c for c in ordered if not done(c)] if not wanted else []
+        state[progress_key] = progress
+        home.save(state)
+    remaining = [] if wanted and wanted <= found else [c for c in ordered if not done(c)]
     complete = not remaining
     others = []
-    if complete and not wanted:
+    if complete:
         progress["complete"] = True
-        state["recover_progress"] = progress
+        state[progress_key] = progress
         home.save(state)
+    if complete and not wanted:
         # What `inbox` counts as ignored: messages from senders not paired here (metadata only, small).
         senders = {}
         for conversation in conversations:
@@ -1793,7 +1802,7 @@ def cmd_recover(home, a):
         notes.append("Restored %d batches the gateway still kept; run `inbox` to read them." % len(restored_now))
     if remaining:
         notes.append("Checked %d conversations in this run; %d more remain. Run `recover%s` again until "
-                     "remaining_conversations is 0." % (len(checked_now), len(remaining), " --check" if a.check else ""))
+                     "remaining_conversations is 0." % (len(checked_now), len(remaining), (" --check" if a.check else "") + (" " + " ".join(sorted(wanted)) if wanted else "")))
     missing = sum(len(item["missing_here"]) for item in report)
     if a.check and missing:
         notes.append("%d batches are kept at the gateway but missing here; run `recover` without --check to save "
@@ -1822,7 +1831,8 @@ def cmd_recover(home, a):
                          "carries 0 files.")
     out({"ok": True, "checked_only": bool(a.check), "checked_now": checked_now,
          "remaining_conversations": len(remaining), "devices": report, "other_senders_waiting": others,
-         "not_found": sorted(wanted - found), "restored": len(restored_now), "next": " ".join(notes)})
+         "not_found": sorted(wanted - found) if complete and not failed else [],
+         "not_checked": sorted(wanted - found) if not complete or failed else [], "restored": len(restored_now), "next": " ".join(notes)})
 
 
 def cmd_inbox(home, a):
