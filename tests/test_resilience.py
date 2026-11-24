@@ -378,6 +378,18 @@ class OneBadJob(Fixture):
         self.assertEqual(result["devices"][0]["conversations_failed"], [])
         self.assertEqual(result["remaining_conversations"], 0)
 
+    def test_named_recovery_continues_to_older_conversations(self):
+        old, new = "cnv_" + "a" * 16, "cnv_" + "b" * 16
+        views = {old: self.view(old, JOBS[0]), new: self.view(new)}
+        opened = {"text": "saved page", "attachments": []}
+        with mock.patch.object(plugin, "open_kept_message", return_value=(opened, None)):
+            _, first = self.recover(views, JOBS[0], "--seconds", "0")
+            self.assertEqual((first["remaining_conversations"], first["not_checked"], first["not_found"]),
+                             (1, [JOBS[0]], []))
+            _, second = self.recover(views, JOBS[0], "--seconds", "0")
+            self.assertEqual((second["remaining_conversations"], second["not_found"], second["restored"]),
+                             (0, [], 1))
+
     def test_recover_never_stays_on_the_same_failing_conversation(self):
         conversations = ["cnv_" + letter * 16 for letter in "abc"]
         views = {cid: plugin.C.ApiError(None, "unreachable") for cid in conversations}
