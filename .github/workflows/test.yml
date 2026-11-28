@@ -9,7 +9,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04  # ubuntu-latest (26.04) has no Python 3.8
+    # The org's Hayabuild Linux runner, an Ubuntu 24.04 host: actions/setup-python installs 3.8 from its 24.04 build
+    # (there is no 3.8 build for 26.04, which is why this job never used ubuntu-latest).
+    runs-on: hayabuild-linux
     timeout-minutes: 10
     strategy:
       fail-fast: false
